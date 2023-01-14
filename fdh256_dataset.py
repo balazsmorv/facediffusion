@@ -1,6 +1,7 @@
 import pathlib
 import torch
 import numpy as np
+from torch.utils.data import Dataset
 try:
     import pyspng
     PYSPNG_IMPORTED = True
@@ -8,10 +9,9 @@ except ImportError:
     PYSPNG_IMPORTED = False
     print("Could not load pyspng. Defaulting to pillow image backend.")
     from PIL import Image
-from tops import logger
 
 
-class FDF256Dataset:
+class FDF256Dataset(Dataset):
 
     def __init__(self,
                  dirpath,
@@ -32,7 +32,7 @@ class FDF256Dataset:
         self.bounding_boxes = torch.from_numpy(np.load(self.dirpath.joinpath("bounding_box.npy")))
         assert len(self.image_paths) == len(self.bounding_boxes)
         assert len(self.image_paths) == len(self.landmarks)
-        logger.log(
+        print(
             f"Dataset loaded from: {dirpath}. Number of samples:{len(self)}")
 
     def get_mask(self, idx):
@@ -53,7 +53,7 @@ class FDF256Dataset:
         else:
             with Image.open(impath) as fp:
                 im = np.array(fp)
-        im = torch.from_numpy(np.rollaxis(im, -1, 0))
+        im = self.transform(im)
         masks = self.get_mask(index)
         landmark = self.landmarks[index]
         batch = {
@@ -64,4 +64,4 @@ class FDF256Dataset:
             batch["keypoints"] = landmark
         if self.transform is None:
             return batch
-        return self.transform(batch)
+        return batch["img"]

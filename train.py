@@ -104,6 +104,7 @@ def sample(model, image_size, batch_size=16, channels=3):
     return p_sample_loop(model, shape=(batch_size, channels, image_size, image_size))
 
 
+
 if __name__ == '__main__':
     torch.manual_seed(0)
     timesteps = 300
@@ -124,10 +125,7 @@ if __name__ == '__main__':
     # calculations for posterior q(x_{t-1} | x_t, x_0)
     posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
 
-    image_size = 128
     transform = Compose([
-        Resize(image_size),
-        CenterCrop(image_size),
         ToTensor(),  # turn into Numpy array of shape HWC, divide by 255
         Lambda(lambda t: (t * 2) - 1),
     ])
@@ -147,6 +145,7 @@ if __name__ == '__main__':
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    image_size = 256
     model = Unet(
         dim=image_size,
         channels=channels,
@@ -156,15 +155,15 @@ if __name__ == '__main__':
     optimizer = Adam(model.parameters(), lr=1e-3)
     epochs = 6
 
-    dataset = FDF256Dataset(dirpath="", load_keypoints=True, transform=transform)
-    dataloader = DataLoader(dataset["train"], batch_size=128, shuffles=True)
+    dataset = FDF256Dataset(dirpath="/home/oem/FDF/train", load_keypoints=False, transform=transform)
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
 
     for epoch in range(epochs):
         for step, batch in enumerate(dataloader):
             optimizer.zero_grad()
 
-            batch_size = batch["pixel_values"].shape[0]
-            batch = batch["pixel_values"].to(device)
+            batch_size = batch.shape[0]
+            batch = batch.to(device)
 
             # Algorithm 1 line 3: sample t uniformally for every example in the batch
             t = torch.randint(0, timesteps, (batch_size,), device=device).long()
