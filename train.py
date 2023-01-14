@@ -9,6 +9,8 @@ from torch.optim import Adam
 from model import Unet
 from torchvision.utils import save_image
 import matplotlib.pyplot as plt
+from fdh256_dataset import FDF256Dataset
+from torch.utils.data import DataLoader
 
 
 def num_to_groups(num, divisor):
@@ -141,6 +143,7 @@ if __name__ == '__main__':
     results_folder = Path("./results")
     results_folder.mkdir(exist_ok=True)
     save_and_sample_every = 1000
+    channels = 3
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -152,6 +155,9 @@ if __name__ == '__main__':
     model.to(device)
     optimizer = Adam(model.parameters(), lr=1e-3)
     epochs = 6
+
+    dataset = FDF256Dataset(dirpath="", load_keypoints=True, transform=transform)
+    dataloader = DataLoader(dataset["train"], batch_size=128, shuffles=True)
 
     for epoch in range(epochs):
         for step, batch in enumerate(dataloader):
