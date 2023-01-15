@@ -3,7 +3,7 @@ import torch
 import torch.nn.functional as F
 from torchvision.transforms import Compose, ToTensor, Lambda, ToPILImage, CenterCrop, Resize
 import numpy as np
-import tqdm
+from tqdm.auto import tqdm
 from pathlib import Path
 from torch.optim import Adam
 from model import Unet
@@ -108,6 +108,7 @@ def sample(model, image_size, batch_size=16, channels=3):
 if __name__ == '__main__':
     torch.manual_seed(0)
     timesteps = 300
+    image_size = 128
 
     # define beta schedule
     betas = linear_beta_schedule(timesteps=timesteps)
@@ -127,6 +128,8 @@ if __name__ == '__main__':
 
     transform = Compose([
         ToTensor(),  # turn into Numpy array of shape HWC, divide by 255
+        Resize(image_size),
+        CenterCrop(image_size),
         Lambda(lambda t: (t * 2) - 1),
     ])
 
@@ -145,21 +148,20 @@ if __name__ == '__main__':
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    image_size = 256
     model = Unet(
         dim=image_size,
         channels=channels,
         dim_mults=(1, 2, 4,)
     )
     model.to(device)
-    optimizer = Adam(model.parameters(), lr=1e-3)
-    epochs = 6
+    optimizer = Adam(model.parameters(), lr=1e-5)
+    epochs = 1
 
     dataset = FDF256Dataset(dirpath="/home/oem/FDF/train", load_keypoints=False, transform=transform)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
 
     for epoch in range(epochs):
-        for step, batch in enumerate(dataloader):
+        for step, batch in enumerate(tqdm(dataloader)):
             optimizer.zero_grad()
 
             batch_size = batch.shape[0]
@@ -177,13 +179,13 @@ if __name__ == '__main__':
             optimizer.step()
 
             # save generated images
-            if step != 0 and step % save_and_sample_every == 0:
-                milestone = step // save_and_sample_every
-                batches = num_to_groups(4, batch_size)
-                all_images_list = list(map(lambda n: sample(model, batch_size=n, channels=channels), batches))
-                all_images = torch.cat(all_images_list, dim=0)
-                all_images = (all_images + 1) * 0.5
-                save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
+            #if step != 0 and step % save_and_sample_every == 0:
+            #    milestone = step // save_and_sample_every
+            #    batches = num_to_groups(4, batch_size)
+            #    all_images_list = list(map(lambda n: sample(model, image_size=image_size, batch_size=n, channels=channels), batches))
+            #    all_images = torch.cat(all_images_list, dim=0)
+            #    all_images = (all_images + 1) * 0.5
+            #    save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
 
     # inference
     samples = sample(model, image_size=image_size, batch_size=64, channels=channels)
