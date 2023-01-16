@@ -60,52 +60,8 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1"):
     return loss
 
 
-@torch.no_grad()
-def p_sample(model, x, t, t_index):
-    betas_t = extract(betas, t, x.shape)
-    sqrt_one_minus_alphas_cumprod_t = extract(
-        sqrt_one_minus_alphas_cumprod, t, x.shape
-    )
-    sqrt_recip_alphas_t = extract(sqrt_recip_alphas, t, x.shape)
-
-    # Equation 11 in the paper
-    # Use our model (noise predictor) to predict the mean
-    model_mean = sqrt_recip_alphas_t * (
-            x - betas_t * model(x, t) / sqrt_one_minus_alphas_cumprod_t
-    )
-
-    if t_index == 0:
-        return model_mean
-    else:
-        posterior_variance_t = extract(posterior_variance, t, x.shape)
-        noise = torch.randn_like(x)
-        # Algorithm 2 line 4:
-        return model_mean + torch.sqrt(posterior_variance_t) * noise
-
-
-# Algorithm 2 (including returning all images)
-@torch.no_grad()
-def p_sample_loop(model, shape):
-    device = next(model.parameters()).device
-
-    b = shape[0]
-    # start from pure noise (for each example in the batch)
-    img = torch.randn(shape, device=device)
-    imgs = []
-
-    for i in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=timesteps):
-        img = p_sample(model, img, torch.full((b,), i, device=device, dtype=torch.long), i)
-        imgs.append(img.cpu().numpy())
-    return imgs
-
-
-@torch.no_grad()
-def sample(model, image_size, batch_size=16, channels=3):
-    return p_sample_loop(model, shape=(batch_size, channels, image_size, image_size))
-
-
-
 if __name__ == '__main__':
+    experiment_name = "model"
     torch.manual_seed(0)
     timesteps = 300
     image_size = 128
@@ -155,7 +111,7 @@ if __name__ == '__main__':
     )
     model.to(device)
     optimizer = Adam(model.parameters(), lr=1e-5)
-    epochs = 1
+    epochs = 2
 
     dataset = FDF256Dataset(dirpath="/home/oem/FDF/train", load_keypoints=False, transform=transform)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
@@ -187,8 +143,5 @@ if __name__ == '__main__':
             #    all_images = (all_images + 1) * 0.5
             #    save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
 
-    # inference
-    samples = sample(model, image_size=image_size, batch_size=64, channels=channels)
-    # show a random one
-    random_index = 5
-    plt.imshow(samples[-1][random_index].reshape(image_size, image_size, channels)[:, :, 0], cmap="gray")
+    # save model
+    torch.save(model.state_dict(), Path("./results/" + experiment_name + ".pth"))
