@@ -6,7 +6,7 @@ from model import Unet
 import torch.nn.functional as F
 from tqdm.auto import tqdm
 from train import extract
-
+from PIL import Image
 
 @torch.no_grad()
 def p_sample(model, x, t, t_index):
@@ -57,7 +57,7 @@ experiment_name = "model"
 channels = 3
 torch.manual_seed(0)
 timesteps = 300
-image_size = 128
+image_size = 32
 
 # define beta schedule
 betas = linear_beta_schedule(timesteps=timesteps)
@@ -83,6 +83,8 @@ if __name__ == '__main__':
         channels=channels,
         dim_mults=(1, 2, 4,)
     )
+    model = torch.nn.DataParallel(model)
+    model = model.to("cuda" if torch.cuda.is_available() else "cpu")
 
     model.load_state_dict(torch.load(Path("./results/" + experiment_name + ".pth")))
     model.eval()
@@ -90,5 +92,8 @@ if __name__ == '__main__':
     samples = sample(model, image_size=image_size, batch_size=1, channels=channels)
     # show a random one
     random_index = 0
-    plt.imshow(samples[-1][random_index].reshape(image_size, image_size, channels))
+    image = samples[-1][random_index].reshape(image_size, image_size, channels)[:,:,0]
+    print(image)
+    plt.imsave('example.jpeg', image, cmap='gray')
+    plt.imshow(image)
     plt.show()

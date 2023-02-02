@@ -64,7 +64,7 @@ if __name__ == '__main__':
     experiment_name = "model"
     torch.manual_seed(0)
     timesteps = 300
-    image_size = 128
+    image_size = 32
 
     # define beta schedule
     betas = linear_beta_schedule(timesteps=timesteps)
@@ -103,18 +103,21 @@ if __name__ == '__main__':
     channels = 3
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(torch.cuda.is_available())
+    print(torch.cuda.device_count())
 
     model = Unet(
         dim=image_size,
         channels=channels,
         dim_mults=(1, 2, 4,)
     )
+    model = torch.nn.DataParallel(model)
     model.to(device)
     optimizer = Adam(model.parameters(), lr=1e-5)
-    epochs = 2
+    epochs = 1
 
-    dataset = FDF256Dataset(dirpath="/home/oem/FDF/train", load_keypoints=False, transform=transform)
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
+    dataset = FDF256Dataset(dirpath="/datadrive/facediffusion/dataset/train", load_keypoints=False, transform=transform)
+    dataloader = DataLoader(dataset, batch_size=256, shuffle=True)
 
     for epoch in range(epochs):
         for step, batch in enumerate(tqdm(dataloader)):

@@ -30,6 +30,9 @@ MANIFEST
 # IntelliJ IDEA
 .idea/
 
+# dataset
+dataset/
+
 # resulting models
 results/
 
