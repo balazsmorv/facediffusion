@@ -64,7 +64,7 @@ if __name__ == '__main__':
     experiment_name = "model"
     torch.manual_seed(0)
     timesteps = 300
-    image_size = 32
+    image_size = 256
 
     # define beta schedule
     betas = linear_beta_schedule(timesteps=timesteps)
@@ -116,8 +116,8 @@ if __name__ == '__main__':
     optimizer = Adam(model.parameters(), lr=1e-5)
     epochs = 1
 
-    dataset = FDF256Dataset(dirpath="/datadrive/facediffusion/dataset/train", load_keypoints=False, transform=transform)
-    dataloader = DataLoader(dataset, batch_size=256, shuffle=True)
+    dataset = FDF256Dataset(dirpath="/datadrive/FDF/dataset/train", load_keypoints=False, transform=transform)
+    dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
 
     for epoch in range(epochs):
         for step, batch in enumerate(tqdm(dataloader)):
@@ -145,6 +145,11 @@ if __name__ == '__main__':
             #    all_images = torch.cat(all_images_list, dim=0)
             #    all_images = (all_images + 1) * 0.5
             #    save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
+        if epoch % 10 == 1:
+            try:
+                torch.save(model.state_dict(), Path("./results/" + experiment_name + epoch + ".pth"))
+            except Exception as e:
+                print(e)
 
     # save model
     torch.save(model.state_dict(), Path("./results/" + experiment_name + ".pth"))

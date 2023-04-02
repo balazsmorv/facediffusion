@@ -57,7 +57,7 @@ experiment_name = "model"
 channels = 3
 torch.manual_seed(0)
 timesteps = 300
-image_size = 32
+image_size = 256
 
 # define beta schedule
 betas = linear_beta_schedule(timesteps=timesteps)
