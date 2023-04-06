@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from fdh256_dataset import FDF256Dataset
 from torch.utils.data import DataLoader
 import torchvision
+from torch.utils.tensorboard import SummaryWriter
 
 
 @torch.no_grad()
@@ -107,6 +108,9 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1"):
 
 
 if __name__ == '__main__':
+
+    writer = SummaryWriter()
+
     experiment_name = "MNIST_model"
     torch.manual_seed(0)
     timesteps = 300
@@ -145,7 +149,7 @@ if __name__ == '__main__':
 
     results_folder = Path("./results")
     results_folder.mkdir(exist_ok=True)
-    save_and_sample_every = 1000
+    save_and_sample_every = 10000
     channels = 1
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -159,8 +163,10 @@ if __name__ == '__main__':
     )
     model = torch.nn.DataParallel(model)
     model.to(device)
-    optimizer = Adam(model.parameters(), lr=1e-5)
-    epochs = 1
+    lr = 1e-5
+    optimizer = Adam(model.parameters(), lr=lr)
+    epochs = 100
+    batch_size = 512
 
     # dataset = FDF256Dataset(dirpath="/datadrive/FDF/dataset/train", load_keypoints=False, transform=transform)
     dataset = torchvision.datasets.MNIST('/datadrive/facediffusion/dataset', train=True, download=True,
@@ -168,9 +174,21 @@ if __name__ == '__main__':
                                                             torchvision.transforms.ToTensor(),
                                                             torchvision.transforms.Normalize((0.1307,), (0.3081,))
                                                             ]))
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    hparams = {
+        "epochs": 100,
+        "optimizer": "Adam",
+        "learning_rate": lr,
+        "image_size": 28,
+        "timesteps": timesteps,
+        "experiment_name": experiment_name,
+        "batch_size": batch_size
+    }
+
 
     for epoch in range(epochs):
+        print(f'Epoch {epoch}')
         for step, batch in enumerate(tqdm(dataloader)):
             optimizer.zero_grad()
             batch = batch[0] # images
@@ -182,28 +200,28 @@ if __name__ == '__main__':
 
             loss = p_losses(model, batch, t, loss_type="huber")
 
-            if step % 100 == 0:
-                print("Loss:", loss.item())
+            writer.add_scalar("loss", loss, epoch)
 
             loss.backward()
             optimizer.step()
 
-            # save generated images
-            if step % save_and_sample_every == 0:
+        if epoch % 10 == 1:
+            try:
+                torch.save(model.state_dict(), Path("./results/" + experiment_name + "_epoch_" + str(epoch) + ".pth"))
                 milestone = step // save_and_sample_every
                 batches = num_to_groups(4, batch_size)
-                all_images_list = list(map(lambda n: sample(model, image_size=image_size, batch_size=n, channels=channels), batches))
+                all_images_list = list(
+                    map(lambda n: sample(model, image_size=image_size, batch_size=n, channels=channels), batches))
                 imlist = all_images_list[0]
                 lst = [torch.from_numpy(item) for item in imlist]
                 all_images = torch.cat(lst, dim=0)
                 all_images = (all_images + 1) * 0.5
+                writer.add_images("Images", all_images, epoch)
                 save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
-
-        if epoch % 10 == 1:
-            try:
-                torch.save(model.state_dict(), Path("./results/" + experiment_name + "_epoch_" + str(epoch) + ".pth"))
             except Exception as e:
                 print(e)
 
     # save model
     torch.save(model.state_dict(), Path("./results/" + experiment_name + ".pth"))
+    writer.flush()
+    writer.close()
