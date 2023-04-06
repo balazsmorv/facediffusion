@@ -94,8 +94,6 @@ if __name__ == '__main__':
     samples = sample(model, image_size=image_size, batch_size=16, channels=channels)
     # show a random one
     random_index = 0
-    image = samples[-1][random_index].reshape(image_size, image_size, channels)[:,:,0]
-    print(image)
-    plt.imsave('example.jpeg', image, cmap='gray')
-    plt.imshow(image)
-    plt.show()
+    for i in range(16):
+        image = samples[-1][i].reshape(image_size, image_size, channels)[:,:,0]
+        plt.imsave(f'example_{i}.jpeg', image, cmap='gray')
