@@ -11,6 +11,52 @@ from torchvision.utils import save_image
 import matplotlib.pyplot as plt
 from fdh256_dataset import FDF256Dataset
 from torch.utils.data import DataLoader
+import torchvision
+
+
+@torch.no_grad()
+def p_sample(model, x, t, t_index):
+    betas_t = extract(betas, t, x.shape)
+    sqrt_one_minus_alphas_cumprod_t = extract(
+        sqrt_one_minus_alphas_cumprod, t, x.shape
+    )
+    sqrt_recip_alphas_t = extract(sqrt_recip_alphas, t, x.shape)
+
+    # Equation 11 in the paper
+    # Use our model (noise predictor) to predict the mean
+    model_mean = sqrt_recip_alphas_t * (
+            x - betas_t * model(x, t) / sqrt_one_minus_alphas_cumprod_t
+    )
+
+    if t_index == 0:
+        return model_mean
+    else:
+        posterior_variance_t = extract(posterior_variance, t, x.shape)
+        noise = torch.randn_like(x)
+        # Algorithm 2 line 4:
+        return model_mean + torch.sqrt(posterior_variance_t) * noise
+
+    # Algorithm 2 (including returning all images)
+
+
+@torch.no_grad()
+def p_sample_loop(model, shape):
+    device = next(model.parameters()).device
+
+    b = shape[0]
+    # start from pure noise (for each example in the batch)
+    img = torch.randn(shape, device=device)
+    imgs = []
+
+    for i in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=timesteps):
+        img = p_sample(model, img, torch.full((b,), i, device=device, dtype=torch.long), i)
+        imgs.append(img.cpu().numpy())
+    return imgs
+
+
+@torch.no_grad()
+def sample(model, image_size, batch_size=16, channels=3):
+    return p_sample_loop(model, shape=(batch_size, channels, image_size, image_size))
 
 
 def num_to_groups(num, divisor):
@@ -61,10 +107,10 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1"):
 
 
 if __name__ == '__main__':
-    experiment_name = "model"
+    experiment_name = "MNIST_model"
     torch.manual_seed(0)
     timesteps = 300
-    image_size = 256
+    image_size = 28
 
     # define beta schedule
     betas = linear_beta_schedule(timesteps=timesteps)
@@ -100,7 +146,7 @@ if __name__ == '__main__':
     results_folder = Path("./results")
     results_folder.mkdir(exist_ok=True)
     save_and_sample_every = 1000
-    channels = 3
+    channels = 1
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(torch.cuda.is_available())
@@ -116,13 +162,18 @@ if __name__ == '__main__':
     optimizer = Adam(model.parameters(), lr=1e-5)
     epochs = 1
 
-    dataset = FDF256Dataset(dirpath="/datadrive/FDF/dataset/train", load_keypoints=False, transform=transform)
+    # dataset = FDF256Dataset(dirpath="/datadrive/FDF/dataset/train", load_keypoints=False, transform=transform)
+    dataset = torchvision.datasets.MNIST('/datadrive/facediffusion/dataset', train=True, download=True,
+                                        transform=torchvision.transforms.Compose([
+                                                            torchvision.transforms.ToTensor(),
+                                                            torchvision.transforms.Normalize((0.1307,), (0.3081,))
+                                                            ]))
     dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
 
     for epoch in range(epochs):
         for step, batch in enumerate(tqdm(dataloader)):
             optimizer.zero_grad()
-
+            batch = batch[0] # images
             batch_size = batch.shape[0]
             batch = batch.to(device)
 
@@ -138,16 +189,19 @@ if __name__ == '__main__':
             optimizer.step()
 
             # save generated images
-            #if step != 0 and step % save_and_sample_every == 0:
-            #    milestone = step // save_and_sample_every
-            #    batches = num_to_groups(4, batch_size)
-            #    all_images_list = list(map(lambda n: sample(model, image_size=image_size, batch_size=n, channels=channels), batches))
-            #    all_images = torch.cat(all_images_list, dim=0)
-            #    all_images = (all_images + 1) * 0.5
-            #    save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
+            if step % save_and_sample_every == 0:
+                milestone = step // save_and_sample_every
+                batches = num_to_groups(4, batch_size)
+                all_images_list = list(map(lambda n: sample(model, image_size=image_size, batch_size=n, channels=channels), batches))
+                imlist = all_images_list[0]
+                lst = [torch.from_numpy(item) for item in imlist]
+                all_images = torch.cat(lst, dim=0)
+                all_images = (all_images + 1) * 0.5
+                save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
+
         if epoch % 10 == 1:
             try:
-                torch.save(model.state_dict(), Path("./results/" + experiment_name + epoch + ".pth"))
+                torch.save(model.state_dict(), Path("./results/" + experiment_name + "_epoch_" + str(epoch) + ".pth"))
             except Exception as e:
                 print(e)
 
