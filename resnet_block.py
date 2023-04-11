@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from einops import rearrange, reduce
 from functools import partial
-from network_helper import exists
+from network_helper import exists, zero_module
 import torch.nn.functional as F
 
 class WeightStandardizedConv2d(nn.Conv2d):
@@ -52,11 +52,21 @@ class Block(nn.Module):
 class ResnetBlock(nn.Module):
     """https://arxiv.org/abs/1512.03385"""
 
-    def __init__(self, dim, dim_out, *, time_emb_dim=None, groups=8):
+    def __init__(self, dim, dim_out, *, time_emb_dim=None, groups=8, condition_dim=None):
         super().__init__()
         self.mlp = (
             nn.Sequential(nn.SiLU(), nn.Linear(time_emb_dim, dim_out * 2))
             if exists(time_emb_dim)
+            else None
+        )
+        self.cond_embed = (
+            nn.Sequential(
+                nn.SiLU(),
+                zero_module(
+                    nn.Conv2d(condition_dim, dim_out * 2, kernel_size=(1, 1))
+                )
+            )
+            if exists(condition_dim)
             else None
         )
 
@@ -64,7 +74,7 @@ class ResnetBlock(nn.Module):
         self.block2 = Block(dim_out, dim_out, groups=groups)
         self.res_conv = nn.Conv2d(dim, dim_out, 1) if dim != dim_out else nn.Identity()
 
-    def forward(self, x, time_emb=None):
+    def forward(self, x, time_emb=None, condition=None):
         scale_shift = None
         if exists(self.mlp) and exists(time_emb):
             time_emb = self.mlp(time_emb)
@@ -72,5 +82,12 @@ class ResnetBlock(nn.Module):
             scale_shift = time_emb.chunk(2, dim=1)
 
         h = self.block1(x, scale_shift=scale_shift)
-        h = self.block2(h)
+
+        cond_scale_shift = None
+        if exists(self.cond_embed) and exists(condition):
+            cond_embed = self.cond_embed(condition)
+            cond_scale_shift = cond_embed.chunk(2, dim=1)
+
+        h = self.block2(h, scale_shift=cond_scale_shift)
+
         return h + self.res_conv(x)

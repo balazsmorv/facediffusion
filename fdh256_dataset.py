@@ -53,7 +53,8 @@ class FDF256Dataset(Dataset):
         else:
             with Image.open(impath) as fp:
                 im = np.array(fp)
-        im = self.transform(im)
+        if self.transform is not None:
+            im = self.transform(im)
         masks = self.get_mask(index)
         landmark = self.landmarks[index]
         batch = {
@@ -62,6 +63,4 @@ class FDF256Dataset(Dataset):
         }
         if self.load_keypoints:
             batch["keypoints"] = landmark
-        if self.transform is None:
-            return batch
-        return batch["img"]
+        return batch

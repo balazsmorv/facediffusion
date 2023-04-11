@@ -9,6 +9,9 @@ from torch.optim import Adam
 from model import Unet
 from torchvision.utils import save_image
 import matplotlib.pyplot as plt
+from functools import partial
+from einops import rearrange
+
 from fdh256_dataset import FDF256Dataset
 from torch.utils.data import DataLoader
 
@@ -63,8 +66,8 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1"):
 if __name__ == '__main__':
     experiment_name = "model"
     torch.manual_seed(0)
-    timesteps = 300
-    image_size = 32
+    timesteps = 1000
+    image_size = 64
 
     # define beta schedule
     betas = linear_beta_schedule(timesteps=timesteps)
@@ -106,31 +109,43 @@ if __name__ == '__main__':
     print(torch.cuda.is_available())
     print(torch.cuda.device_count())
 
+    dataset = FDF256Dataset(dirpath="/home/jovyan/work/nas/USERS/tormaszabolcs/DATA/FDF256/FDF/data/train", load_keypoints=True, transform=transform)
+    dataloader = DataLoader(dataset, batch_size=128, shuffle=True, num_workers=8,
+                            prefetch_factor=2, persistent_workers=True, pin_memory=True)
+
     model = Unet(
         dim=image_size,
         channels=channels,
-        dim_mults=(1, 2, 4,)
+        dim_mults=(1, 2, 4,),
+        self_condition_dim=(7 * 2 if dataset.load_keypoints else None)
     )
     model = torch.nn.DataParallel(model)
     model.to(device)
     optimizer = Adam(model.parameters(), lr=1e-5)
-    epochs = 1
-
-    dataset = FDF256Dataset(dirpath="/datadrive/facediffusion/dataset/train", load_keypoints=False, transform=transform)
-    dataloader = DataLoader(dataset, batch_size=256, shuffle=True)
+    epochs = 1000
 
     for epoch in range(epochs):
         for step, batch in enumerate(tqdm(dataloader)):
             optimizer.zero_grad()
 
-            batch_size = batch.shape[0]
-            batch = batch.to(device)
+            if not dataset.load_keypoints:
+                data = batch.to(device)
+            else:
+                data = batch['img'].to(device)
+
+            batch_size = data.shape[0]
 
             # Algorithm 1 line 3: sample t uniformally for every example in the batch
             t = torch.randint(0, timesteps, (batch_size,), device=device).long()
 
-            loss = p_losses(model, batch, t, loss_type="huber")
-
+            if not dataset.load_keypoints:
+                model_fn = model
+            else:
+                keypoints = batch['keypoints'].to(device)
+                keypoints = rearrange(keypoints.view(batch_size, -1), "b c -> b c 1 1")
+                model_fn = partial(model, x_self_cond=keypoints)
+            loss = p_losses(model_fn, data, t, loss_type="huber")
+            
             if step % 100 == 0:
                 print("Loss:", loss.item())
 
@@ -145,6 +160,9 @@ if __name__ == '__main__':
             #    all_images = torch.cat(all_images_list, dim=0)
             #    all_images = (all_images + 1) * 0.5
             #    save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
+            
+        # save model
+        torch.save(model.state_dict(), Path("./results/" + experiment_name + f"_{epoch+1}.pth"))
 
     # save model
     torch.save(model.state_dict(), Path("./results/" + experiment_name + ".pth"))

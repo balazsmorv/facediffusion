@@ -24,15 +24,15 @@ finally, a ResNet block followed by a convolutional layer is applied.
         out_dim=None,
         dim_mults=(1, 2, 4, 8),
         channels=3,
-        self_condition=False,
+        self_condition_dim=None,
         resnet_block_groups=4,
     ):
         super().__init__()
 
         # determine dimensions
         self.channels = channels
-        self.self_condition = self_condition
-        input_channels = channels * (2 if self_condition else 1)
+
+        input_channels = channels
 
         init_dim = default(init_dim, dim)
         self.init_conv = nn.Conv2d(input_channels, init_dim, 1, padding=0) # changed to 1 and 0 from 7,3
@@ -40,7 +40,8 @@ finally, a ResNet block followed by a convolutional layer is applied.
         dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
 
-        block_klass = partial(ResnetBlock, groups=resnet_block_groups)
+        block_klass = partial(ResnetBlock, groups=resnet_block_groups, 
+                              condition_dim=self_condition_dim if self_condition_dim > 0 else None)
 
         # time embeddings
         time_dim = dim * 4
@@ -51,6 +52,14 @@ finally, a ResNet block followed by a convolutional layer is applied.
             nn.GELU(),
             nn.Linear(time_dim, time_dim),
         )
+
+        self.self_condition = (self_condition_dim is not None) and (self_condition_dim > 0)
+        if self.self_condition:
+            self.cond_embed = nn.Sequential(
+                nn.Conv2d(self_condition_dim, init_dim, kernel_size=(1, 1)),
+                nn.GELU(),
+                nn.Conv2d(init_dim, init_dim, kernel_size=(1, 1))
+            )
 
         # layers
         self.downs = nn.ModuleList([])
@@ -100,10 +109,6 @@ finally, a ResNet block followed by a convolutional layer is applied.
         self.final_conv = nn.Conv2d(dim, self.out_dim, 1)
 
     def forward(self, x, time, x_self_cond=None):
-        if self.self_condition:
-            x_self_cond = default(x_self_cond, lambda: torch.zeros_like(x))
-            x = torch.cat((x_self_cond, x), dim=1)
-
         x = self.init_conv(x) # Conv layer is applied on the batch of noisy images
         r = x.clone()
 
@@ -113,30 +118,30 @@ finally, a ResNet block followed by a convolutional layer is applied.
 
 
         for block1, block2, attn, downsample in self.downs:
-            x = block1(x, t) # resnet block
+            x = block1(x, t, x_self_cond) # resnet block
             h.append(x)
 
-            x = block2(x, t) # resnet block
+            x = block2(x, t, x_self_cond) # resnet block
             x = attn(x) # attention
             h.append(x)
 
             x = downsample(x)
 
-        x = self.mid_block1(x, t)
+        x = self.mid_block1(x, t, x_self_cond)
         x = self.mid_attn(x)
-        x = self.mid_block2(x, t)
+        x = self.mid_block2(x, t, x_self_cond)
 
         for block1, block2, attn, upsample in self.ups:
             x = torch.cat((x, h.pop()), dim=1)
-            x = block1(x, t)
+            x = block1(x, t, x_self_cond)
 
             x = torch.cat((x, h.pop()), dim=1)
-            x = block2(x, t)
+            x = block2(x, t, x_self_cond)
             x = attn(x)
 
             x = upsample(x)
 
         x = torch.cat((x, r), dim=1)
 
-        x = self.final_res_block(x, t)
+        x = self.final_res_block(x, t, x_self_cond)
         return self.final_conv(x)

@@ -42,3 +42,12 @@ def Downsample(dim, dim_out=None):
         Rearrange("b c (h p1) (w p2) -> b (c p1 p2) h w", p1=2, p2=2),
         nn.Conv2d(dim * 4, default(dim_out, dim), 1),
     )
+
+
+def zero_module(module):
+    """
+    Zero out the parameters of a module and return it.
+    """
+    for p in module.parameters():
+        p.detach().zero_()
+    return module
