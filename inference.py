@@ -12,6 +12,7 @@ from einops import rearrange
 from torch.utils.data import DataLoader
 from functools import partial
 import numpy as np
+from time import time
 
 @torch.no_grad()
 def p_sample(model, x, t, t_index):
@@ -54,7 +55,7 @@ def p_sample_loop(model, shape, device="cuda"):
 
 @torch.no_grad()
 def sample(model, image_size, batch_size=16, channels=3, device="cuda"):
-    return p_sample_loop(model, shape=(batch_size, channels, image_size, image_size), device="cuda")
+    return p_sample_loop(model, shape=(batch_size, channels, image_size, image_size), device=device)
 
 
 experiment_name = "model_548"
@@ -62,6 +63,7 @@ channels = 3
 torch.manual_seed(0)
 timesteps = 1000
 image_size = 64
+device= "cuda" if torch.cuda.is_available() else "cpu"
 
 # define beta schedule
 betas = linear_beta_schedule(timesteps=timesteps)
@@ -79,12 +81,10 @@ sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
 # calculations for posterior q(x_{t-1} | x_t, x_0)
 posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
 
-dataset = FDF256Dataset(dirpath="/home/jovyan/work/nas/USERS/tormaszabolcs/DATA/FDF256/FDF/data/train", load_keypoints=True, transform=None)
+dataset = FDF256Dataset(dirpath="./dataset/FDF/train", load_keypoints=True, transform=None)
 dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=1,
                         prefetch_factor=1, persistent_workers=False, pin_memory=False)
 
-
-device="cuda"
 
 if __name__ == '__main__':
 
@@ -95,22 +95,22 @@ if __name__ == '__main__':
         self_condition_dim=(7 * 2 if dataset.load_keypoints else None)
     )
     model = torch.nn.DataParallel(model)
-    model = model.to("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
 
-    model.load_state_dict(torch.load(Path("./results/" + experiment_name + ".pth")))
+    model.load_state_dict(torch.load(Path("./model/" + experiment_name + ".pth"), map_location=device))
     model.eval()
     
     og_data = next(iter(dataloader))
     og_keypoints = og_data['keypoints'].to(device)
     og_keypoints = rearrange(og_keypoints.view(og_data['img'].shape[0], -1), "b c -> b c 1 1")
     model_fn = partial(model, x_self_cond=og_keypoints)
-    
+    inference_start = time()
     # inference
-    samples = sample(model_fn, image_size=image_size, batch_size=1, channels=channels)
-    
+    samples = sample(model_fn, image_size=image_size, batch_size=1, channels=channels, device=device)
     # show a random one
     random_index = 0
     image = samples[-1][random_index].reshape(image_size, image_size, channels) #[:,:,0]
+    print(f"Inference execution time {round(time() - inference_start)} seconds")
     plt.imsave('og_image.jpeg', og_data['img'][0].numpy())
     plt.imsave('example.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
     plt.imshow(image)
