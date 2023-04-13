@@ -79,7 +79,7 @@ sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
 # calculations for posterior q(x_{t-1} | x_t, x_0)
 posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
 
-dataset = FDF256Dataset(dirpath="/home/jovyan/work/nas/USERS/tormaszabolcs/DATA/FDF256/FDF/data/train", load_keypoints=True, transform=None)
+dataset = FDF256Dataset(dirpath="/home/oem/FDF/train", load_keypoints=True, transform=None)
 dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=1,
                         prefetch_factor=1, persistent_workers=False, pin_memory=False)
 
@@ -106,12 +106,15 @@ if __name__ == '__main__':
     model_fn = partial(model, x_self_cond=og_keypoints)
     
     # inference
-    samples = sample(model_fn, image_size=image_size, batch_size=1, channels=channels)
-    
+    samples = sample(model_fn, image_size=image_size, batch_size=1, channels=channels) # list of 1000 ndarrays of shape (batchsize, 3, 64, 64)
+
     # show a random one
-    random_index = 0
-    image = samples[-1][random_index].reshape(image_size, image_size, channels) #[:,:,0]
-    plt.imsave('og_image.jpeg', og_data['img'][0].numpy())
-    plt.imsave('example.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
-    plt.imshow(image)
-    plt.show()
+    #random_index = 0
+    #image = samples[-1][random_index].reshape(image_size, image_size, channels) #[:,:,0]
+    plt.imsave('og_image.jpeg', og_data['img'][1].numpy())
+    #plt.imsave('example.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
+
+    for i in range(1):
+        # image = samples[-1][i].reshape(image_size, image_size, channels) #[:,:,0]
+        image = rearrange(samples[-1][i], 'c h w -> h w c')
+        plt.imsave(f'example_{i}.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
