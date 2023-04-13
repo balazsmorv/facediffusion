@@ -137,22 +137,22 @@ if __name__ == '__main__':
             loss.backward()
             optimizer.step()
 
-            if epoch % 10 == 1:
-                try:
-                    torch.save(model.state_dict(),
-                               Path("./results/" + experiment_name + "_epoch_" + str(epoch) + ".pth"))
-                    milestone = step // save_and_sample_every
-                    batches = num_to_groups(4, batch_size)
-                    all_images_list = list(
-                        map(lambda n: sample(model, image_size=image_size, batch_size=n, channels=channels), batches))
-                    imlist = all_images_list[0]
-                    lst = [torch.from_numpy(item) for item in imlist]
-                    all_images = torch.cat(lst, dim=0)
-                    all_images = (all_images + 1) * 0.5
-                    writer.add_images("Images", all_images, epoch)
-                    save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
-                except Exception as e:
-                    print(e)
+        if epoch % 10 == 1:
+            try:
+                torch.save(model.state_dict(),
+                            Path("./results/" + experiment_name + "_epoch_" + str(epoch) + ".pth"))
+                milestone = step // save_and_sample_every
+                batches = num_to_groups(4, batch_size)
+                all_images_list = list(
+                    map(lambda n: sample(model, image_size=image_size, batch_size=n, channels=channels), batches))
+                imlist = all_images_list[0]
+                lst = [torch.from_numpy(item) for item in imlist]
+                all_images = torch.cat(lst, dim=0)
+                all_images = (all_images + 1) * 0.5
+                writer.add_images("Images", all_images, epoch)
+                save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
+            except Exception as e:
+                print(e)
 
     # save model
     torch.save(model.state_dict(), Path("./results/" + experiment_name + ".pth"))
