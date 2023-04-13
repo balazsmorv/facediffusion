@@ -104,17 +104,14 @@ if __name__ == '__main__':
     og_keypoints = og_data['keypoints'].to(device)
     og_keypoints = rearrange(og_keypoints.view(og_data['img'].shape[0], -1), "b c -> b c 1 1")
     model_fn = partial(model, x_self_cond=og_keypoints)
+
+    batch_size = 10
     
     # inference
-    samples = sample(model_fn, image_size=image_size, batch_size=1, channels=channels) # list of 1000 ndarrays of shape (batchsize, 3, 64, 64)
+    samples = sample(model_fn, image_size=image_size, batch_size=batch_size, channels=channels) # list of 1000 ndarrays of shape (batchsize, 3, 64, 64)
 
-    # show a random one
-    #random_index = 0
-    #image = samples[-1][random_index].reshape(image_size, image_size, channels) #[:,:,0]
-    plt.imsave('og_image.jpeg', og_data['img'][1].numpy())
-    #plt.imsave('example.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
+    plt.imsave('og_image.jpeg', og_data['img'][0].numpy())
 
-    for i in range(1):
-        # image = samples[-1][i].reshape(image_size, image_size, channels) #[:,:,0]
+    for i in range(batch_size):
         image = rearrange(samples[-1][i], 'c h w -> h w c')
         plt.imsave(f'example_{i}.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
