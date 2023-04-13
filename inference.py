@@ -5,8 +5,8 @@ from schedulers import linear_beta_schedule
 from model import Unet
 import torch.nn.functional as F
 from tqdm.auto import tqdm
-from train import extract
 from PIL import Image
+from network_helper import extract
 
 @torch.no_grad()
 def p_sample(model, x, t, t_index):
