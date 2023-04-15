@@ -5,8 +5,8 @@ from schedulers import linear_beta_schedule
 from model import Unet
 import torch.nn.functional as F
 from tqdm.auto import tqdm
-from train import extract
 from PIL import Image
+from network_helper import extract
 from fdh256_dataset import FDF256Dataset
 from einops import rearrange
 from torch.utils.data import DataLoader
@@ -61,7 +61,7 @@ experiment_name = "model_548"
 channels = 3
 torch.manual_seed(0)
 timesteps = 1000
-image_size = 64
+image_size = 256
 
 # define beta schedule
 betas = linear_beta_schedule(timesteps=timesteps)
@@ -99,14 +99,14 @@ if __name__ == '__main__':
 
     model.load_state_dict(torch.load(Path("./results/" + experiment_name + ".pth")))
     model.eval()
-    
+
     og_data = next(iter(dataloader))
     og_keypoints = og_data['keypoints'].to(device)
     og_keypoints = rearrange(og_keypoints.view(og_data['img'].shape[0], -1), "b c -> b c 1 1")
     model_fn = partial(model, x_self_cond=og_keypoints)
 
     batch_size = 10
-    
+
     # inference
     samples = sample(model_fn, image_size=image_size, batch_size=batch_size, channels=channels) # list of 1000 ndarrays of shape (batchsize, 3, 64, 64)
 

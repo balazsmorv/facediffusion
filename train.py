@@ -14,6 +14,9 @@ from einops import rearrange
 
 from fdh256_dataset import FDF256Dataset
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
+from network_helper import extract
+from inference import sample
 
 
 def num_to_groups(num, divisor):
@@ -23,13 +26,6 @@ def num_to_groups(num, divisor):
     if remainder > 0:
         arr.append(remainder)
     return arr
-
-
-def extract(a, t, x_shape):
-    batch_size = t.shape[0]
-    out = a.gather(-1, t.cpu())
-    return out.reshape(batch_size, *((1,) * (len(x_shape) - 1))).to(t.device)
-
 
 # forward diffusion (using the nice property)
 def q_sample(x_start, t, noise=None):
@@ -64,10 +60,13 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1"):
 
 
 if __name__ == '__main__':
+
+    writer = SummaryWriter()
+
     experiment_name = "model"
     torch.manual_seed(0)
     timesteps = 1000
-    image_size = 64
+    image_size = 256
 
     # define beta schedule
     betas = linear_beta_schedule(timesteps=timesteps)
@@ -102,7 +101,7 @@ if __name__ == '__main__':
 
     results_folder = Path("./results")
     results_folder.mkdir(exist_ok=True)
-    save_and_sample_every = 1000
+    save_and_sample_every = 10000
     channels = 3
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -121,8 +120,10 @@ if __name__ == '__main__':
     )
     model = torch.nn.DataParallel(model)
     model.to(device)
-    optimizer = Adam(model.parameters(), lr=1e-5)
-    epochs = 1000
+    lr = 1e-5
+    optimizer = Adam(model.parameters(), lr=lr)
+    epochs = 1
+    batch_size = 512
 
     for epoch in range(epochs):
         for step, batch in enumerate(tqdm(dataloader)):
@@ -145,24 +146,36 @@ if __name__ == '__main__':
                 keypoints = rearrange(keypoints.view(batch_size, -1), "b c -> b c 1 1")
                 model_fn = partial(model, x_self_cond=keypoints)
             loss = p_losses(model_fn, data, t, loss_type="huber")
-            
+
             if step % 100 == 0:
                 print("Loss:", loss.item())
+
+            writer.add_scalar("loss", loss, epoch)
 
             loss.backward()
             optimizer.step()
 
-            # save generated images
-            #if step != 0 and step % save_and_sample_every == 0:
-            #    milestone = step // save_and_sample_every
-            #    batches = num_to_groups(4, batch_size)
-            #    all_images_list = list(map(lambda n: sample(model, image_size=image_size, batch_size=n, channels=channels), batches))
-            #    all_images = torch.cat(all_images_list, dim=0)
-            #    all_images = (all_images + 1) * 0.5
-            #    save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
-            
         # save model
         torch.save(model.state_dict(), Path("./results/" + experiment_name + f"_{epoch+1}.pth"))
+        if epoch % 10 == 1:
+            try:
+                torch.save(model.state_dict(),
+                            Path("./results/" + experiment_name + "_epoch_" + str(epoch) + ".pth"))
+                milestone = step // save_and_sample_every
+                batches = num_to_groups(4, batch_size)
+                all_images_list = list(
+                    map(lambda n: sample(model, image_size=image_size, batch_size=n, channels=channels), batches))
+                imlist = all_images_list[0]
+                lst = [torch.from_numpy(item) for item in imlist]
+                all_images = torch.cat(lst, dim=0)
+                all_images = (all_images + 1) * 0.5
+                writer.add_images("Images", all_images, epoch)
+                save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
+            except Exception as e:
+                print(e)
 
     # save model
     torch.save(model.state_dict(), Path("./results/" + experiment_name + ".pth"))
+
+    writer.flush()
+    writer.close()
