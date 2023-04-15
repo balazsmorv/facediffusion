@@ -13,6 +13,23 @@ from torch.utils.data import DataLoader
 from functools import partial
 import numpy as np
 
+
+INFERENCE_CFG = {
+    # Model and train parameters
+    'timesteps': 1000,
+    'channels': 3,
+
+    # Dataset params
+    'dataset_pth': "/home/jovyan/work/nas/USERS/tormaszabolcs/DATA/FDF256/FDF/data/train",
+    'load_keypoints': True,
+    'image_size': 256,
+    'batch_size': 1,
+
+    # Logging parameters
+    'experiment_name': 'model',
+}
+
+
 @torch.no_grad()
 def p_sample(model, x, t, t_index):
     betas_t = extract(betas, t, x.shape)
@@ -57,11 +74,11 @@ def sample(model, image_size, batch_size=16, channels=3, device="cuda"):
     return p_sample_loop(model, shape=(batch_size, channels, image_size, image_size), device="cuda")
 
 
-experiment_name = "model_548"
-channels = 3
+experiment_name = INFERENCE_CFG['experiment_name']
+channels = INFERENCE_CFG['channels']
 torch.manual_seed(0)
-timesteps = 1000
-image_size = 256
+timesteps = INFERENCE_CFG['timesteps']
+image_size = INFERENCE_CFG['image_size']
 
 # define beta schedule
 betas = linear_beta_schedule(timesteps=timesteps)
@@ -79,8 +96,8 @@ sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
 # calculations for posterior q(x_{t-1} | x_t, x_0)
 posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
 
-dataset = FDF256Dataset(dirpath="/home/oem/FDF/train", load_keypoints=True, transform=None)
-dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=1,
+dataset = FDF256Dataset(dirpath=INFERENCE_CFG['dataset_pth'], load_keypoints=INFERENCE_CFG['load_keypoints'], transform=None)
+dataloader = DataLoader(dataset, batch_size=INFERENCE_CFG['batch_size'], shuffle=False, num_workers=1,
                         prefetch_factor=1, persistent_workers=False, pin_memory=False)
 
 
@@ -105,7 +122,7 @@ if __name__ == '__main__':
     og_keypoints = rearrange(og_keypoints.view(og_data['img'].shape[0], -1), "b c -> b c 1 1")
     model_fn = partial(model, x_self_cond=og_keypoints)
 
-    batch_size = 10
+    batch_size = INFERENCE_CFG['batch_size']
 
     # inference
     samples = sample(model_fn, image_size=image_size, batch_size=batch_size, channels=channels) # list of 1000 ndarrays of shape (batchsize, 3, 64, 64)

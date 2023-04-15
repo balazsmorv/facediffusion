@@ -19,6 +19,26 @@ from network_helper import extract
 from inference import sample
 
 
+TRAIN_CFG = {
+    # Model and train parameters
+    'lr': 1e-5,
+    'epochs': 1,
+    'timesteps': 1000,
+    'channels': 3,
+
+    # Dataset params
+    'dataset_pth': "/home/jovyan/work/nas/USERS/tormaszabolcs/DATA/FDF256/FDF/data/train",
+    'load_keypoints': True,
+    'image_size': 128,
+    'batch_size': 24,
+
+    # Logging parameters
+    'experiment_name': 'model',
+    'eval_freq': 1,
+    'save_and_sample_every': 10000,
+}
+
+
 def num_to_groups(num, divisor):
     groups = num // divisor
     remainder = num % divisor
@@ -60,13 +80,21 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1"):
 
 
 if __name__ == '__main__':
+    timesteps = TRAIN_CFG['timesteps']
+    image_size = TRAIN_CFG['image_size']
+    batch_size = TRAIN_CFG['batch_size']
+    channels = TRAIN_CFG['channels']
+    epochs = TRAIN_CFG['epochs']
+    lr = TRAIN_CFG['lr']
+    eval_freq = TRAIN_CFG['eval_freq']
+    experiment_name = TRAIN_CFG['experiment_name']
+    save_and_sample_every = TRAIN_CFG['save_and_sample_every']
+    dataset_pth = TRAIN_CFG['dataset_pth']
+    load_keypoints = TRAIN_CFG['load_keypoints']
 
     writer = SummaryWriter()
 
-    experiment_name = "model"
     torch.manual_seed(0)
-    timesteps = 1000
-    image_size = 256
 
     # define beta schedule
     betas = linear_beta_schedule(timesteps=timesteps)
@@ -101,15 +129,13 @@ if __name__ == '__main__':
 
     results_folder = Path("./results")
     results_folder.mkdir(exist_ok=True)
-    save_and_sample_every = 10000
-    channels = 3
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(torch.cuda.is_available())
     print(torch.cuda.device_count())
 
-    dataset = FDF256Dataset(dirpath="/home/jovyan/work/nas/USERS/tormaszabolcs/DATA/FDF256/FDF/data/train", load_keypoints=True, transform=transform)
-    dataloader = DataLoader(dataset, batch_size=128, shuffle=True, num_workers=8,
+    dataset = FDF256Dataset(dirpath=dataset_pth, load_keypoints=load_keypoints, transform=transform)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=10,
                             prefetch_factor=2, persistent_workers=True, pin_memory=True)
 
     model = Unet(
@@ -120,12 +146,11 @@ if __name__ == '__main__':
     )
     model = torch.nn.DataParallel(model)
     model.to(device)
-    lr = 1e-5
     optimizer = Adam(model.parameters(), lr=lr)
-    epochs = 1
-    batch_size = 512
 
     for epoch in range(epochs):
+        model.train()
+        
         for step, batch in enumerate(tqdm(dataloader)):
             optimizer.zero_grad()
 
@@ -154,25 +179,25 @@ if __name__ == '__main__':
 
             loss.backward()
             optimizer.step()
-
-        # save model
-        torch.save(model.state_dict(), Path("./results/" + experiment_name + f"_{epoch+1}.pth"))
-        if epoch % 10 == 1:
-            try:
-                torch.save(model.state_dict(),
-                            Path("./results/" + experiment_name + "_epoch_" + str(epoch) + ".pth"))
-                milestone = step // save_and_sample_every
-                batches = num_to_groups(4, batch_size)
-                all_images_list = list(
-                    map(lambda n: sample(model, image_size=image_size, batch_size=n, channels=channels), batches))
-                imlist = all_images_list[0]
-                lst = [torch.from_numpy(item) for item in imlist]
-                all_images = torch.cat(lst, dim=0)
-                all_images = (all_images + 1) * 0.5
-                writer.add_images("Images", all_images, epoch)
-                save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
-            except Exception as e:
-                print(e)
+        
+        if (epoch + 1) % eval_freq == 0:
+            with torch.no_grad():
+                try:
+                    torch.save(model.state_dict(),
+                                Path("./results/" + experiment_name + "_epoch_" + str(epoch) + ".pth"))
+                    model.eval()
+                    milestone = step // save_and_sample_every
+                    batches = num_to_groups(4, batch_size)
+                    all_images_list = list(
+                        map(lambda n: sample(model, image_size=image_size, batch_size=n, channels=channels), batches))
+                    imlist = all_images_list[0]
+                    lst = [torch.from_numpy(item) for item in imlist]
+                    all_images = torch.cat(lst, dim=0)
+                    all_images = (all_images + 1) * 0.5
+                    writer.add_images("Images", all_images, epoch)
+                    save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
+                except Exception as e:
+                    print(e)
 
     # save model
     torch.save(model.state_dict(), Path("./results/" + experiment_name + ".pth"))
