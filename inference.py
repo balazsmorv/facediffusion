@@ -23,10 +23,10 @@ INFERENCE_CFG = {
     'channels': 3,
 
     # Dataset params
-    'dataset_pth': "/home/jovyan/work/nas/USERS/tormaszabolcs/DATA/FDF256/FDF/data/val",
+    'dataset_pth': "/datadrive/FDF/dataset/val",
     'load_keypoints': True,
     'image_size': 64,
-    'batch_size': 16,
+    'batch_size': 3072,
 
     # Logging parameters
     'experiment_name': 'model_epoch_179',
@@ -81,9 +81,9 @@ def sample(model, image_size, batch_size=16, channels=3, device="cuda", img2inpa
                          img2inpaint=img2inpaint)
 
 
-os.makedirs('generated_images')
-os.makedirs('original_images')
-os.makedirs('masked_images')
+#os.makedirs('generated_images')
+#os.makedirs('original_images')
+#os.makedirs('masked_images')
 
 experiment_name = INFERENCE_CFG['experiment_name']
 channels = INFERENCE_CFG['channels']
@@ -129,13 +129,13 @@ reverse_transform = Compose([
 
 dataset = FDF256Dataset(dirpath=INFERENCE_CFG['dataset_pth'], load_keypoints=INFERENCE_CFG['load_keypoints'],
                         img_transform=img_transform, mask_transform=mask_transform, load_masks=True)
-dataloader = DataLoader(dataset, batch_size=INFERENCE_CFG['batch_size'], shuffle=False, num_workers=1,
-                        prefetch_factor=1, persistent_workers=False, pin_memory=False)
+dataloader = DataLoader(dataset, batch_size=INFERENCE_CFG['batch_size'], shuffle=False, num_workers=20,
+                        prefetch_factor=1, persistent_workers=True, pin_memory=False)
 
 device = "cuda"
 
-if __name__ == '__main__':
 
+def perform_demo_inference():
     model = Unet(
         dim=image_size,
         channels=channels,
@@ -186,3 +186,42 @@ if __name__ == '__main__':
             image = rearrange(samples[-1][i], 'c h w -> h w c')
             plt.imsave(f'generated_images/{i}.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
 
+
+
+
+if __name__ == '__main__':
+    perform_demo_inference()
+    
+    
+    
+def infer(checkpoint_path: str, exp_name: str):
+    
+    os.mkdir(f'generated_images/{exp_name}')
+    
+    model = Unet(
+        dim=image_size,
+        channels=channels,
+        dim_mults=(1, 2, 4,),
+        self_condition_dim=(7 * 2 if dataset.load_keypoints else None)
+    )
+    model = torch.nn.DataParallel(model)
+    model = model.to("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.load_state_dict(torch.load(Path(checkpoint_path)))
+    model.eval()
+    
+    print("Starting inference")
+    for idx_batch, batch in tqdm(enumerate(dataloader)):
+        print(idx_batch)
+        data = batch
+        kpts = data["keypoints"].to(device)
+        kpts = rearrange(kpts.view(data['img'].shape[0], -1), "b c -> b c 1 1")
+        model_fn = partial(model, x_self_cond=kpts)
+        img2inpaint = data['img'].to(device) * data['mask'].to(device)
+        
+        samples = sample(model_fn, image_size=image_size, batch_size=INFERENCE_CFG['batch_size'], channels=channels, img2inpaint=img2inpaint)  # list of 1000 ndarrays of shape (batchsize, 3, 64, 64)
+        for i in range(INFERENCE_CFG['batch_size']):
+            image = rearrange(samples[-1][i], 'c h w -> h w c')
+            num = idx_batch * INFERENCE_CFG['batch_size'] + i
+            plt.imsave(f'generated_images/{exp_name}/{i}.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
+        
