@@ -14,12 +14,16 @@ except ImportError:
 class FDF256Dataset(Dataset):
 
     def __init__(self,
-                 dirpath,
-                 load_keypoints: bool,
-                 transform):
+                 dirpath: str,
+                 load_keypoints: bool = False,
+                 img_transform: torch.nn.Module = None,
+                 load_masks: bool = False,
+                 mask_transform: torch.nn.Module = None):
         dirpath = pathlib.Path(dirpath)
         self.dirpath = dirpath
-        self.transform = transform
+        self.img_transform = img_transform
+        self.mask_transform = mask_transform
+        self.load_masks = load_masks
         self.load_keypoints = load_keypoints
         assert self.dirpath.is_dir(),\
             f"Did not find dataset at: {dirpath}"
@@ -53,14 +57,17 @@ class FDF256Dataset(Dataset):
         else:
             with Image.open(impath) as fp:
                 im = np.array(fp)
-        if self.transform is not None:
-            im = self.transform(im)
+        if self.img_transform is not None:
+            im = self.img_transform(im)
         masks = self.get_mask(index)
+        if self.mask_transform is not None:
+            masks = self.mask_transform(masks)
         landmark = self.landmarks[index]
         batch = {
             "img": im,
-            "mask": masks,
         }
+        if self.load_masks:
+            batch["mask"] = masks
         if self.load_keypoints:
             batch["keypoints"] = landmark
         return batch
