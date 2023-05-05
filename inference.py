@@ -1,3 +1,4 @@
+from zipfile import BadZipFile
 import torch
 from pathlib import Path
 import matplotlib.pyplot as plt
@@ -210,6 +211,7 @@ def infer(checkpoint_path: str, exp_name: str):
     model.load_state_dict(torch.load(Path(checkpoint_path)))
     model.eval()
     
+    generated_im_num = 0
     print("Starting inference")
     for idx_batch, batch in tqdm(enumerate(dataloader)):
         print(idx_batch)
@@ -219,9 +221,9 @@ def infer(checkpoint_path: str, exp_name: str):
         model_fn = partial(model, x_self_cond=kpts)
         img2inpaint = data['img'].to(device) * data['mask'].to(device)
         
-        samples = sample(model_fn, image_size=image_size, batch_size=INFERENCE_CFG['batch_size'], channels=channels, img2inpaint=img2inpaint)  # list of 1000 ndarrays of shape (batchsize, 3, 64, 64)
-        for i in range(INFERENCE_CFG['batch_size']):
+        samples = sample(model_fn, image_size=image_size, batch_size=kpts.shape[0], channels=channels, img2inpaint=img2inpaint)  # list of 1000 ndarrays of shape (batchsize, 3, 64, 64)
+        for i in range(kpts.shape[0]):
             image = rearrange(samples[-1][i], 'c h w -> h w c')
-            num = idx_batch * INFERENCE_CFG['batch_size'] + i
-            plt.imsave(f'generated_images/{exp_name}/{i}.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
+            plt.imsave(f'generated_images/{exp_name}/{generated_im_num}.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
+            generated_im_num += 1
         
