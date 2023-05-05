@@ -1,4 +1,6 @@
 from inspect import isfunction
+
+import numpy as np
 from torch import nn, einsum
 from einops.layers.torch import Rearrange
 
