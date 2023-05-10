@@ -18,13 +18,15 @@ class FDF256Dataset(Dataset):
                  load_keypoints: bool = False,
                  img_transform: torch.nn.Module = None,
                  load_masks: bool = False,
-                 mask_transform: torch.nn.Module = None):
+                 mask_transform: torch.nn.Module = None,
+                 load_impath: bool = False):
         dirpath = pathlib.Path(dirpath)
         self.dirpath = dirpath
         self.img_transform = img_transform
         self.mask_transform = mask_transform
         self.load_masks = load_masks
         self.load_keypoints = load_keypoints
+        self.load_impath = load_impath
         assert self.dirpath.is_dir(),\
             f"Did not find dataset at: {dirpath}"
         image_dir = self.dirpath.joinpath("images")
@@ -70,4 +72,6 @@ class FDF256Dataset(Dataset):
             batch["mask"] = masks
         if self.load_keypoints:
             batch["keypoints"] = landmark
+        if self.load_impath:
+            batch['impath'] = impath
         return batch
