@@ -74,4 +74,5 @@ class FDF256Dataset(Dataset):
             batch["keypoints"] = landmark
         if self.load_impath:
             batch['impath'] = impath
+            batch["face_bbox"] = self.bounding_boxes[index]
         return batch
