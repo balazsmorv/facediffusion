@@ -35,6 +35,7 @@ dataset/
 
 # resulting models
 results/
+generated_images/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

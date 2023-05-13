@@ -20,7 +20,7 @@ import os, psutil
 import subprocess as sp
 from time import time_ns, time
 
-PLATFORM = 'jetson'
+PLATFORM = 'pc'
 
 if PLATFORM == 'jetson':
     from jtop import jtop
@@ -111,7 +111,6 @@ def p_sample_loop(model, shape, device="cuda", img2inpaint=None):
         step_time = round((time_ns() - step_start) / 1000**2)
         step_freq = round(1 / step_time * 1000)
         cpu_mem, gpu_mem = get_memory_usage()
-        print((step_time, step_freq, cpu_mem, gpu_mem))
         logs[i] = np.array((step_time, step_freq, cpu_mem, gpu_mem))
         if img2inpaint is not None:
             img = torch.where(img2inpaint == 0, img, img2inpaint)
@@ -207,7 +206,6 @@ def perform_demo_inference():
     samples = sample(model_fn, image_size=image_size, batch_size=batch_size, channels=channels,
                     img2inpaint=img2inpaint, device=device)  # list of 1000 ndarrays of shape (batchsize, 3, 64, 64)
     
-    print((round(np.sum(logs[:,0]) / 1000),*list(np.round(np.mean(logs, axis=0)))))
     reversed_imgs = []
     for img_idx in range(og_data['img'].shape[0]):
         reversed_imgs.append(reverse_transform(og_data['img'][img_idx]))
@@ -216,19 +214,22 @@ def perform_demo_inference():
         og_data['mask'].permute(0, 2, 3, 1).cpu().numpy() if dataset.load_masks else 1)
     og_masked_batch = montage(reversed_masked_imgs, channel_axis=3)
     # plt.imsave('og_image.jpeg', reverse_transform(og_data['img'][0]) * (og_data['mask'][0].permute(1, 2, 0).cpu().numpy() if dataset.load_masks else 1))
-    plt.imsave('og_masked_batch.png', og_masked_batch)
+    plt.imsave('results/og_masked_batch.png', og_masked_batch)
 
     og_batch = montage(reversed_imgs, channel_axis=3)
-    plt.imsave('og_batch.png', og_batch)
+    plt.imsave('results/og_batch.png', og_batch)
 
     if INFERENCE_CFG['save_montage']:
         gen_batch = montage(np.asarray(((samples[-1].transpose(0, 2, 3, 1) + 1) / 2) * 255, dtype=np.uint8),
                             channel_axis=3)
-        plt.imsave('gen_batch.png', gen_batch)
+        plt.imsave('results/gen_batch.png', gen_batch)
     else:
         for i in range(batch_size):
             image = rearrange(samples[-1][i], 'c h w -> h w c')
             plt.imsave(f'generated_images/{i}.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
+            
+    stats = np.concatenate([np.array([np.round(np.sum(logs[:,0]) / 1000)]),np.round(np.mean(logs, axis=0)),np.round(np.std(logs, axis=0))])
+    np.savetxt(f'results/hw_stats_batch_{INFERENCE_CFG["batch_size"]}.csv', stats, delimiter=',')
 
 
 
