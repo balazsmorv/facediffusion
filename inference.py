@@ -20,6 +20,11 @@ import os, psutil
 import subprocess as sp
 from time import time_ns, time
 
+PLATFORM = 'jetson'
+
+if PLATFORM == 'jetson':
+    from jtop import jtop
+
 INFERENCE_CFG = {
     # Model and train parameters
     'timesteps': 1024,
@@ -48,6 +53,25 @@ def get_gpu_memory():
         raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
     memory_use_values = [int(x.split()[0]) for i, x in enumerate(memory_use_info)][0]
     return memory_use_values
+
+def get_memory_usage():
+    if PLATFORM == 'jetson':
+        with jtop() as jetson:
+            for process in jetson.processes:
+                if len(process) == 0:
+                    continue
+                if process[-1] == 'python3':
+                    cpu_mem = round(process[-3] / 1000)
+                    gpu_mem = round(process[-2] / 1000)
+                    return cpu_mem, gpu_mem
+    elif PLATFORM == 'rpi':
+        cpu_mem = round(psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2)
+        return cpu_mem, 0
+    else:
+        cpu_mem = round(psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2)
+        gpu_mem = get_gpu_memory()
+        return cpu_mem, gpu_mem
+    return 0,0
 
 @torch.no_grad()
 def p_sample(model, x, t, t_index):
@@ -86,8 +110,8 @@ def p_sample_loop(model, shape, device="cuda", img2inpaint=None):
         img = p_sample(model, img, torch.full((b,), i, device=device, dtype=torch.long), i)
         step_time = round((time_ns() - step_start) / 1000**2)
         step_freq = round(1 / step_time * 1000)
-        cpu_mem = round(psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2)
-        gpu_mem = get_gpu_memory()
+        cpu_mem, gpu_mem = get_memory_usage()
+        print((step_time, step_freq, cpu_mem, gpu_mem))
         logs[i] = np.array((step_time, step_freq, cpu_mem, gpu_mem))
         if img2inpaint is not None:
             img = torch.where(img2inpaint == 0, img, img2inpaint)
