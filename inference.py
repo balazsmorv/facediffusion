@@ -16,7 +16,9 @@ import numpy as np
 from torchvision.transforms import Compose, ToTensor, Lambda, ToPILImage, CenterCrop, Resize
 from skimage.util import montage
 import shutil
-import os
+import os, psutil
+import subprocess as sp
+from time import time_ns, time
 
 INFERENCE_CFG = {
     # Model and train parameters
@@ -24,16 +26,28 @@ INFERENCE_CFG = {
     'channels': 3,
 
     # Dataset params
-    'dataset_pth': "/datadrive/FDF/dataset/val",
+    'dataset_pth': "./dataset/FDF/train",
     'load_keypoints': True,
     'image_size': 64,
-    'batch_size': 3072,
+    'batch_size': 1,
 
     # Logging parameters
-    'experiment_name': 'model_epoch_179',
+    'experiment_name': 'model_epoch_399',
     'save_montage': False
 }
 
+logs = np.zeros((INFERENCE_CFG['timesteps'], 4))
+
+def get_gpu_memory():
+    output_to_list = lambda x: x.decode('ascii').split('\n')[:-1]
+    ACCEPTABLE_AVAILABLE_MEMORY = 1024
+    COMMAND = "nvidia-smi --query-compute-apps=used_memory --format=csv,noheader"
+    try:
+        memory_use_info = output_to_list(sp.check_output(COMMAND.split(),stderr=sp.STDOUT))
+    except sp.CalledProcessError as e:
+        raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
+    memory_use_values = [int(x.split()[0]) for i, x in enumerate(memory_use_info)][0]
+    return memory_use_values
 
 @torch.no_grad()
 def p_sample(model, x, t, t_index):
@@ -67,9 +81,14 @@ def p_sample_loop(model, shape, device="cuda", img2inpaint=None):
     img = torch.randn(shape if img2inpaint is None else img2inpaint.shape, device=device)
     img = torch.where(img2inpaint == 0, img, img2inpaint)
     imgs = []
-
     for i in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=timesteps):
+        step_start = time_ns()
         img = p_sample(model, img, torch.full((b,), i, device=device, dtype=torch.long), i)
+        step_time = round((time_ns() - step_start) / 1000**2)
+        step_freq = round(1 / step_time * 1000)
+        cpu_mem = round(psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2)
+        gpu_mem = get_gpu_memory()
+        logs[i] = np.array((step_time, step_freq, cpu_mem, gpu_mem))
         if img2inpaint is not None:
             img = torch.where(img2inpaint == 0, img, img2inpaint)
         imgs.append(img.cpu().numpy())
@@ -78,7 +97,7 @@ def p_sample_loop(model, shape, device="cuda", img2inpaint=None):
 
 @torch.no_grad()
 def sample(model, image_size, batch_size=16, channels=3, device="cuda", img2inpaint=None):
-    return p_sample_loop(model, shape=(batch_size, channels, image_size, image_size), device="cuda",
+    return p_sample_loop(model, shape=(batch_size, channels, image_size, image_size), device=device,
                          img2inpaint=img2inpaint)
 
 
@@ -133,7 +152,7 @@ dataset = FDF256Dataset(dirpath=INFERENCE_CFG['dataset_pth'], load_keypoints=INF
 dataloader = DataLoader(dataset, batch_size=INFERENCE_CFG['batch_size'], shuffle=False, num_workers=20,
                         prefetch_factor=1, persistent_workers=True, pin_memory=False)
 
-device = "cuda"
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def perform_demo_inference():
@@ -144,7 +163,7 @@ def perform_demo_inference():
         self_condition_dim=(7 * 2 if dataset.load_keypoints else None)
     )
     model = torch.nn.DataParallel(model)
-    model = model.to("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
 
     model.load_state_dict(torch.load(Path("./results/" + experiment_name + ".pth")))
     model.eval()
@@ -160,11 +179,10 @@ def perform_demo_inference():
         img2inpaint = og_data['img'].to(device) * og_data['mask'].to(device)
     else:
         img2inpaint = None
-
-    # inference
     samples = sample(model_fn, image_size=image_size, batch_size=batch_size, channels=channels,
-                     img2inpaint=img2inpaint)  # list of 1000 ndarrays of shape (batchsize, 3, 64, 64)
-
+                    img2inpaint=img2inpaint, device=device)  # list of 1000 ndarrays of shape (batchsize, 3, 64, 64)
+    
+    print((round(np.sum(logs[:,0]) / 1000),*list(np.round(np.mean(logs, axis=0)))))
     reversed_imgs = []
     for img_idx in range(og_data['img'].shape[0]):
         reversed_imgs.append(reverse_transform(og_data['img'][img_idx]))

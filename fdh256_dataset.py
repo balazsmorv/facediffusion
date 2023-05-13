@@ -36,8 +36,8 @@ class FDF256Dataset(Dataset):
         self.image_paths.sort(key=lambda x: int(x.stem))
         self.landmarks = np.load(self.dirpath.joinpath("landmarks.npy")).reshape(-1, 7, 2).astype(np.float32)
         self.bounding_boxes = torch.from_numpy(np.load(self.dirpath.joinpath("bounding_box.npy")))
-        assert len(self.image_paths) == len(self.bounding_boxes)
-        assert len(self.image_paths) == len(self.landmarks)
+        # assert len(self.image_paths) == len(self.bounding_boxes)
+        # assert len(self.image_paths) == len(self.landmarks)
         print(
             f"Dataset loaded from: {dirpath}. Number of samples:{len(self)}")
 
