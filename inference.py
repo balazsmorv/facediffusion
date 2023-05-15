@@ -19,11 +19,15 @@ import shutil
 import os, psutil
 import subprocess as sp
 from time import time_ns, time
+import sys
+import pandas as pd
 
-PLATFORM = 'pc'
+PLATFORM = sys.argv[3]
 
 if PLATFORM == 'jetson':
     from jtop import jtop
+    jetson = jtop()
+    jetson.start()
 
 INFERENCE_CFG = {
     # Model and train parameters
@@ -34,10 +38,10 @@ INFERENCE_CFG = {
     'dataset_pth': "./dataset/FDF/train",
     'load_keypoints': True,
     'image_size': 64,
-    'batch_size': 1,
+    'batch_size': int(sys.argv[2]) if len(sys.argv) > 1 else 10,
 
     # Logging parameters
-    'experiment_name': 'model_epoch_399',
+    'experiment_path': sys.argv[1] if len(sys.argv) > 1 else 'results/model_epoch_399.pth',
     'save_montage': False
 }
 
@@ -56,14 +60,13 @@ def get_gpu_memory():
 
 def get_memory_usage():
     if PLATFORM == 'jetson':
-        with jtop() as jetson:
-            for process in jetson.processes:
-                if len(process) == 0:
-                    continue
-                if process[-1] == 'python3':
-                    cpu_mem = round(process[-3] / 1000)
-                    gpu_mem = round(process[-2] / 1000)
-                    return cpu_mem, gpu_mem
+        for process in jetson.processes:
+            if len(process) == 0:
+                continue
+            if process[-1] == 'python3':
+                cpu_mem = round(process[-3] / 1000)
+                gpu_mem = round(process[-2] / 1000)
+                return cpu_mem, gpu_mem
     elif PLATFORM == 'rpi':
         cpu_mem = round(psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2)
         return cpu_mem, 0
@@ -110,7 +113,11 @@ def p_sample_loop(model, shape, device="cuda", img2inpaint=None):
         img = p_sample(model, img, torch.full((b,), i, device=device, dtype=torch.long), i)
         step_time = round((time_ns() - step_start) / 1000**2)
         step_freq = round(1 / step_time * 1000)
-        cpu_mem, gpu_mem = get_memory_usage()
+        if sys.argv[4] == 'mem':
+            cpu_mem, gpu_mem = get_memory_usage()
+        else:
+            cpu_mem, gpu_mem = 0,0
+        # print(step_time, step_freq, cpu_mem, gpu_mem)
         logs[i] = np.array((step_time, step_freq, cpu_mem, gpu_mem))
         if img2inpaint is not None:
             img = torch.where(img2inpaint == 0, img, img2inpaint)
@@ -128,7 +135,7 @@ def sample(model, image_size, batch_size=16, channels=3, device="cuda", img2inpa
 #os.makedirs('original_images')
 #os.makedirs('masked_images')
 
-experiment_name = INFERENCE_CFG['experiment_name']
+experiment_path = INFERENCE_CFG['experiment_path']
 channels = INFERENCE_CFG['channels']
 torch.manual_seed(0)
 timesteps = INFERENCE_CFG['timesteps']
@@ -189,7 +196,7 @@ def perform_demo_inference():
     model = torch.nn.DataParallel(model)
     model = model.to(device)
 
-    model.load_state_dict(torch.load(Path("./results/" + experiment_name + ".pth")))
+    model.load_state_dict(torch.load(experiment_path))
     model.eval()
 
     og_data = next(iter(dataloader))
@@ -198,6 +205,8 @@ def perform_demo_inference():
     model_fn = partial(model, x_self_cond=og_keypoints)
 
     batch_size = INFERENCE_CFG['batch_size']
+
+    print(f"Batch size: {batch_size}")
 
     if dataset.load_masks:
         img2inpaint = og_data['img'].to(device) * og_data['mask'].to(device)
@@ -228,8 +237,8 @@ def perform_demo_inference():
             image = rearrange(samples[-1][i], 'c h w -> h w c')
             plt.imsave(f'generated_images/{i}.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
             
-    stats = np.concatenate([np.array([np.round(np.sum(logs[:,0]) / 1000)]),np.round(np.mean(logs, axis=0)),np.round(np.std(logs, axis=0))])
-    np.savetxt(f'results/hw_stats_batch_{INFERENCE_CFG["batch_size"]}.csv', stats, delimiter=',')
+    stats = np.concatenate([np.array([np.round(np.sum(logs[:,0]) / 1000)]),np.round(np.mean(logs[1:], axis=0)),np.round(np.std(logs[1:], axis=0))])
+    pd.DataFrame(stats).to_csv(f'results/hw_stats_batch_{INFERENCE_CFG["batch_size"]}_{experiment_path.split("/")[-1][:-4]}_{sys.argv[4]}.csv', index=None, header=None)
 
 
 
