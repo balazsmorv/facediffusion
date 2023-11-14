@@ -17,22 +17,65 @@ from skimage.util import montage
 import shutil
 import os
 
+
 INFERENCE_CFG = {
     # Model and train parameters
     'timesteps': 1024,
     'channels': 3,
 
     # Dataset params
-    'dataset_pth': "/home/jovyan/work/nas/USERS/tormaszabolcs/DATA/FDF256/FDF/data/val",
+    'dataset_pth': "/home/oem/FDF/val",
     'load_keypoints': True,
     'image_size': 64,
-    'batch_size': 16,
+    'batch_size': 2,
 
     # Logging parameters
-    'experiment_name': 'model_epoch_179',
+    'experiment_name': 'model_epoch_399ema',
     'save_montage': False
 }
 
+class Schedule:
+    def __init__(self, steps):
+        self.steps = steps
+
+        # define beta schedule
+        self.betas = linear_beta_schedule(timesteps=steps)
+
+        # define alphas
+        self.alphas = 1. - self.betas
+        self.alphas_cumprod = torch.cumprod(self.alphas, axis=0)
+        self.alphas_cumprod_prev = F.pad(self.alphas_cumprod[:-1], (1, 0), value=1.0)
+        self.sqrt_recip_alphas = torch.sqrt(1.0 / self.alphas)
+
+        # calculations for diffusion q(x_t | x_{t-1}) and others
+        self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)
+        self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - self.alphas_cumprod)
+        self.sqrt_alphas_cumprod_prev = torch.sqrt(self.alphas_cumprod_prev)
+        self.sqrt_one_minus_alphas_cumprod_prev = torch.sqrt(1. - self.alphas_cumprod_prev)
+
+        # calculations for posterior q(x_{t-1} | x_t, x_0)
+        self.posterior_variance = self.betas * (1. - self.alphas_cumprod_prev) / (1. - self.alphas_cumprod)
+
+        self.sqrt_recip_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod)
+        self.sqrt_recipm1_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod - 1)
+
+def predict_xstart_from_eps(schedule, x_t, t, eps):
+    assert x_t.shape == eps.shape
+    return (
+            extract(schedule.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t
+            - extract(schedule.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * eps
+    )
+
+@torch.no_grad()
+def ddim_sample(schedule, model, x, t):
+    sqrt_alphas_cumprod_prev_extr = extract(schedule.sqrt_alphas_cumprod_prev, t, x.shape)
+    sqrt_one_minus_alphas_cumprod_prev_extr = extract(schedule.sqrt_one_minus_alphas_cumprod_prev, t, x.shape)
+
+    pred_noise = model(x, t)
+    pred_x0 = predict_xstart_from_eps(schedule, x, t, pred_noise)
+
+    pred_mean = pred_x0 * sqrt_alphas_cumprod_prev_extr + sqrt_one_minus_alphas_cumprod_prev_extr * pred_noise
+    return pred_mean
 
 @torch.no_grad()
 def p_sample(model, x, t, t_index):
@@ -68,7 +111,8 @@ def p_sample_loop(model, shape, device="cuda", img2inpaint=None):
     imgs = []
 
     for i in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=timesteps):
-        img = p_sample(model, img, torch.full((b,), i, device=device, dtype=torch.long), i)
+        #img = p_sample(model, img, torch.full((b,), i, device=device, dtype=torch.long), i)
+        img = ddim_sample(schedule=Schedule(INFERENCE_CFG['timesteps']), model=model, x=img, t=torch.full((b,), i, device=device, dtype=torch.long))
         if img2inpaint is not None:
             img = torch.where(img2inpaint == 0, img, img2inpaint)
         imgs.append(img.cpu().numpy())
@@ -81,9 +125,9 @@ def sample(model, image_size, batch_size=16, channels=3, device="cuda", img2inpa
                          img2inpaint=img2inpaint)
 
 
-os.makedirs('generated_images')
-os.makedirs('original_images')
-os.makedirs('masked_images')
+os.makedirs('generated_images', exist_ok=True)
+os.makedirs('original_images', exist_ok=True)
+os.makedirs('masked_images', exist_ok=True)
 
 experiment_name = INFERENCE_CFG['experiment_name']
 channels = INFERENCE_CFG['channels']

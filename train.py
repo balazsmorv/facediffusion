@@ -22,16 +22,16 @@ from inference import sample
 TRAIN_CFG = {
     # Model and train parameters
     'lr': 5e-5,
-    'epochs': 1000,
+    'epochs': 1,
     'timesteps': 1024,
     'channels': 3,
 
     # Dataset params
-    'dataset_pth': "/home/jovyan/work/nas/USERS/tormaszabolcs/DATA/FDF256/FDF/data/train",
+    'dataset_pth': "/home/oem/FDF/train",
     'load_keypoints': True,
     'load_masks': True,
     'image_size': 64,
-    'batch_size': 16,
+    'batch_size': 32,
 
     # Logging parameters
     'experiment_name': 'model',
@@ -91,6 +91,8 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1", masks=None):
 
 
 if __name__ == '__main__':
+
+    # CONFIG SETUPS
     timesteps = TRAIN_CFG['timesteps']
     image_size = TRAIN_CFG['image_size']
     batch_size = TRAIN_CFG['batch_size']
@@ -103,16 +105,17 @@ if __name__ == '__main__':
     dataset_pth = TRAIN_CFG['dataset_pth']
     load_keypoints = TRAIN_CFG['load_keypoints']
     load_masks = TRAIN_CFG["load_masks"]
-
     writer = SummaryWriter()
 
+
     torch.manual_seed(0)
+
 
     # define beta schedule
     betas = linear_beta_schedule(timesteps=timesteps)
 
     # define alphas
-    alphas = 1. - betas
+    alphas: torch.Tensor = 1. - betas
     alphas_cumprod = torch.cumprod(alphas, axis=0)
     alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
     sqrt_recip_alphas = torch.sqrt(1.0 / alphas)
@@ -209,7 +212,7 @@ if __name__ == '__main__':
             ema.update()
 
         if (epoch + 1) % eval_freq == 0:
-            with torch.no_grad():
+            with torch.inference_mode():
                 try:
                     torch.save(model.state_dict(),
                                Path("./results/" + experiment_name + "_epoch_" + str(epoch) + ".pth"))
