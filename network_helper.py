@@ -1,7 +1,8 @@
 from inspect import isfunction
 
 import numpy as np
-from torch import nn, einsum
+import torch
+from torch import nn, einsum, Tensor
 from einops.layers.torch import Rearrange
 
 def exists(x):
@@ -55,7 +56,17 @@ def zero_module(module):
     return module
 
 
-def extract(a, t, x_shape):
+def extract(a: Tensor, t: Tensor, x_shape: torch.Size):
+    """
+    Extract the appropriate t index for a batch of indices
+    """
     batch_size = t.shape[0]
     out = a.gather(-1, t.cpu())
     return out.reshape(batch_size, *((1,) * (len(x_shape) - 1))).to(t.device)
+
+
+if __name__ == '__main__':
+    a = torch.rand(size=(16, 1)) # alpha cumprod
+    t = torch.ones(size=(16, 1), dtype=torch.int64) # times
+    x_shape = torch.Size([5, 5, 3]) # image shape
+    print(extract(a, t, x_shape))

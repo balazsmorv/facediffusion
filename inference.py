@@ -27,55 +27,13 @@ INFERENCE_CFG = {
     'dataset_pth': "/home/oem/FDF/val",
     'load_keypoints': True,
     'image_size': 64,
-    'batch_size': 2,
+    'batch_size': 16,
 
     # Logging parameters
     'experiment_name': 'model_epoch_399ema',
+    'model_path': '/Users/balazsmorvay/Downloads/Azure VM/facediffusion/model_weights/model_epoch_399ema.pth',
     'save_montage': False
 }
-
-class Schedule:
-    def __init__(self, steps):
-        self.steps = steps
-
-        # define beta schedule
-        self.betas = linear_beta_schedule(timesteps=steps)
-
-        # define alphas
-        self.alphas = 1. - self.betas
-        self.alphas_cumprod = torch.cumprod(self.alphas, axis=0)
-        self.alphas_cumprod_prev = F.pad(self.alphas_cumprod[:-1], (1, 0), value=1.0)
-        self.sqrt_recip_alphas = torch.sqrt(1.0 / self.alphas)
-
-        # calculations for diffusion q(x_t | x_{t-1}) and others
-        self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)
-        self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - self.alphas_cumprod)
-        self.sqrt_alphas_cumprod_prev = torch.sqrt(self.alphas_cumprod_prev)
-        self.sqrt_one_minus_alphas_cumprod_prev = torch.sqrt(1. - self.alphas_cumprod_prev)
-
-        # calculations for posterior q(x_{t-1} | x_t, x_0)
-        self.posterior_variance = self.betas * (1. - self.alphas_cumprod_prev) / (1. - self.alphas_cumprod)
-
-        self.sqrt_recip_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod)
-        self.sqrt_recipm1_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod - 1)
-
-def predict_xstart_from_eps(schedule, x_t, t, eps):
-    assert x_t.shape == eps.shape
-    return (
-            extract(schedule.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t
-            - extract(schedule.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * eps
-    )
-
-@torch.no_grad()
-def ddim_sample(schedule, model, x, t):
-    sqrt_alphas_cumprod_prev_extr = extract(schedule.sqrt_alphas_cumprod_prev, t, x.shape)
-    sqrt_one_minus_alphas_cumprod_prev_extr = extract(schedule.sqrt_one_minus_alphas_cumprod_prev, t, x.shape)
-
-    pred_noise = model(x, t)
-    pred_x0 = predict_xstart_from_eps(schedule, x, t, pred_noise)
-
-    pred_mean = pred_x0 * sqrt_alphas_cumprod_prev_extr + sqrt_one_minus_alphas_cumprod_prev_extr * pred_noise
-    return pred_mean
 
 @torch.no_grad()
 def p_sample(model, x, t, t_index):
@@ -103,16 +61,16 @@ def p_sample(model, x, t, t_index):
 
 
 @torch.no_grad()
-def p_sample_loop(model, shape, device="cuda", img2inpaint=None):
+def p_sample_loop(model, shape, device, img2inpaint=None):
     b = shape[0]
     # start from pure noise (for each example in the batch)
     img = torch.randn(shape if img2inpaint is None else img2inpaint.shape, device=device)
-    img = torch.where(img2inpaint == 0, img, img2inpaint)
+    if img2inpaint is not None:
+        img = torch.where(img2inpaint == 0, img, img2inpaint)
     imgs = []
 
     for i in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=timesteps):
-        #img = p_sample(model, img, torch.full((b,), i, device=device, dtype=torch.long), i)
-        img = ddim_sample(schedule=Schedule(INFERENCE_CFG['timesteps']), model=model, x=img, t=torch.full((b,), i, device=device, dtype=torch.long))
+        img = p_sample(model, img, torch.full((b,), i, device=device, dtype=torch.long), i)
         if img2inpaint is not None:
             img = torch.where(img2inpaint == 0, img, img2inpaint)
         imgs.append(img.cpu().numpy())
@@ -120,8 +78,8 @@ def p_sample_loop(model, shape, device="cuda", img2inpaint=None):
 
 
 @torch.no_grad()
-def sample(model, image_size, batch_size=16, channels=3, device="cuda", img2inpaint=None):
-    return p_sample_loop(model, shape=(batch_size, channels, image_size, image_size), device="cuda",
+def sample(model, image_size, batch_size, channels, device, img2inpaint=None):
+    return p_sample_loop(model, shape=(batch_size, channels, image_size, image_size), device=device,
                          img2inpaint=img2inpaint)
 
 
@@ -171,12 +129,14 @@ reverse_transform = Compose([
     # ToPILImage(),
 ])
 
-dataset = FDF256Dataset(dirpath=INFERENCE_CFG['dataset_pth'], load_keypoints=INFERENCE_CFG['load_keypoints'],
-                        img_transform=img_transform, mask_transform=mask_transform, load_masks=True)
-dataloader = DataLoader(dataset, batch_size=INFERENCE_CFG['batch_size'], shuffle=False, num_workers=1,
-                        prefetch_factor=1, persistent_workers=False, pin_memory=False)
+# dataset = FDF256Dataset(dirpath=INFERENCE_CFG['dataset_pth'], load_keypoints=INFERENCE_CFG['load_keypoints'],
+#                        img_transform=img_transform, mask_transform=mask_transform, load_masks=True)
+# dataloader = DataLoader(dataset, batch_size=INFERENCE_CFG['batch_size'], shuffle=False, num_workers=1,
+#                        prefetch_factor=1, persistent_workers=False, pin_memory=False)
 
-device = "cuda"
+if torch.cuda.is_available(): device = 'cuda'; print('CUDA is available')
+elif torch.backends.mps.is_available(): device = 'mps'; print('MPS is available')
+else: device = 'cpu'; print('CPU is available')
 
 if __name__ == '__main__':
 
@@ -184,30 +144,31 @@ if __name__ == '__main__':
         dim=image_size,
         channels=channels,
         dim_mults=(1, 2, 4,),
-        self_condition_dim=(7 * 2 if dataset.load_keypoints else None)
+        self_condition_dim=(7 * 2) # if dataset.load_keypoints else None)
     )
     model = torch.nn.DataParallel(model)
-    model = model.to("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
 
-    model.load_state_dict(torch.load(Path("./results/" + experiment_name + ".pth")))
+    model.load_state_dict(torch.load(Path(INFERENCE_CFG['model_path']), map_location=torch.device(device)))
     model.eval()
 
-    og_data = next(iter(dataloader))
-    og_keypoints = og_data['keypoints'].to(device)
-    og_keypoints = rearrange(og_keypoints.view(og_data['img'].shape[0], -1), "b c -> b c 1 1")
-    model_fn = partial(model, x_self_cond=og_keypoints)
+    #og_data = next(iter(dataloader))
+    #og_keypoints = og_data['keypoints'].to(device)
+    #og_keypoints = rearrange(og_keypoints.view(og_data['img'].shape[0], -1), "b c -> b c 1 1")
+    #model_fn = partial(model, x_self_cond=og_keypoints)
 
     batch_size = INFERENCE_CFG['batch_size']
 
-    if dataset.load_masks:
-        img2inpaint = og_data['img'].to(device) * og_data['mask'].to(device)
-    else:
-        img2inpaint = None
+    #if dataset.load_masks:
+    #    img2inpaint = og_data['img'].to(device) * og_data['mask'].to(device)
+    #else:
+    img2inpaint = None
 
     # inference
-    samples = sample(model_fn, image_size=image_size, batch_size=batch_size, channels=channels,
+    samples = sample(model, image_size=image_size, batch_size=batch_size, channels=channels, device=device,
                      img2inpaint=img2inpaint)  # list of 1000 ndarrays of shape (batchsize, 3, 64, 64)
 
+    """
     reversed_imgs = []
     for img_idx in range(og_data['img'].shape[0]):
         reversed_imgs.append(reverse_transform(og_data['img'][img_idx]))
@@ -229,4 +190,8 @@ if __name__ == '__main__':
         for i in range(batch_size):
             image = rearrange(samples[-1][i], 'c h w -> h w c')
             plt.imsave(f'generated_images/{i}.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
+"""
 
+    for i in range(batch_size):
+        image = rearrange(samples[-1][i], 'c h w -> h w c')
+        plt.imsave(f'generated_images/{i}.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
