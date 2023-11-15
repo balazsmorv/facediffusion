@@ -23,7 +23,7 @@ class DDIM_Inference_Params:
     image_size = 64
 
     model_path = '/Users/balazsmorvay/Downloads/Azure VM/facediffusion/model_weights/model_epoch_399ema.pth'
-    batch_size = 32
+    batch_size = 512
 
 inference_params = DDIM_Inference_Params()
 
