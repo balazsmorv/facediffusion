@@ -27,11 +27,11 @@ INFERENCE_CFG = {
     'dataset_pth': "/home/oem/FDF/val",
     'load_keypoints': True,
     'image_size': 64,
-    'batch_size': 16,
+    'batch_size': 4,
 
     # Logging parameters
     'experiment_name': 'model_epoch_399ema',
-    'model_path': '/Users/balazsmorvay/Downloads/Azure VM/facediffusion/model_weights/model_epoch_399ema.pth',
+    'model_path': '/home/oem/facediffusion/results/model_epoch_399ema.pth',
     'save_montage': False
 }
 
@@ -129,10 +129,10 @@ reverse_transform = Compose([
     # ToPILImage(),
 ])
 
-# dataset = FDF256Dataset(dirpath=INFERENCE_CFG['dataset_pth'], load_keypoints=INFERENCE_CFG['load_keypoints'],
-#                        img_transform=img_transform, mask_transform=mask_transform, load_masks=True)
-# dataloader = DataLoader(dataset, batch_size=INFERENCE_CFG['batch_size'], shuffle=False, num_workers=1,
-#                        prefetch_factor=1, persistent_workers=False, pin_memory=False)
+dataset = FDF256Dataset(dirpath=INFERENCE_CFG['dataset_pth'], load_keypoints=INFERENCE_CFG['load_keypoints'],
+                        img_transform=img_transform, mask_transform=mask_transform, load_masks=True)
+dataloader = DataLoader(dataset, batch_size=INFERENCE_CFG['batch_size'], shuffle=False, num_workers=1,
+                        prefetch_factor=1, persistent_workers=False, pin_memory=False)
 
 if torch.cuda.is_available(): device = 'cuda'; print('CUDA is available')
 elif torch.backends.mps.is_available(): device = 'mps'; print('MPS is available')
@@ -144,7 +144,7 @@ if __name__ == '__main__':
         dim=image_size,
         channels=channels,
         dim_mults=(1, 2, 4,),
-        self_condition_dim=(7 * 2) # if dataset.load_keypoints else None)
+        self_condition_dim=(7 * 2 if dataset.load_keypoints else None)
     )
     model = torch.nn.DataParallel(model)
     model = model.to(device)
@@ -152,20 +152,20 @@ if __name__ == '__main__':
     model.load_state_dict(torch.load(Path(INFERENCE_CFG['model_path']), map_location=torch.device(device)))
     model.eval()
 
-    #og_data = next(iter(dataloader))
-    #og_keypoints = og_data['keypoints'].to(device)
-    #og_keypoints = rearrange(og_keypoints.view(og_data['img'].shape[0], -1), "b c -> b c 1 1")
-    #model_fn = partial(model, x_self_cond=og_keypoints)
+    og_data = next(iter(dataloader))
+    og_keypoints = og_data['keypoints'].to(device)
+    og_keypoints = rearrange(og_keypoints.view(og_data['img'].shape[0], -1), "b c -> b c 1 1")
+    model_fn = partial(model, x_self_cond=og_keypoints)
 
     batch_size = INFERENCE_CFG['batch_size']
 
-    #if dataset.load_masks:
-    #    img2inpaint = og_data['img'].to(device) * og_data['mask'].to(device)
-    #else:
-    img2inpaint = None
+    if dataset.load_masks:
+        img2inpaint = og_data['img'].to(device) * og_data['mask'].to(device)
+    else:
+        img2inpaint = None
 
     # inference
-    samples = sample(model, image_size=image_size, batch_size=batch_size, channels=channels, device=device,
+    samples = sample(model_fn, image_size=image_size, batch_size=batch_size, channels=channels, device=device,
                      img2inpaint=img2inpaint)  # list of 1000 ndarrays of shape (batchsize, 3, 64, 64)
 
     """

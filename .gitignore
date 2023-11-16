@@ -10,6 +10,7 @@ __pycache__/
 .Python
 build/
 generated_images/
+generated_images_ddim/
 Coginfocom/
 BasicSR/
 develop-eggs/

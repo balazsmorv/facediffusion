@@ -1,7 +1,9 @@
 import torch
 from pathlib import Path
+import matplotlib
+#matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
-from schedulers import linear_beta_schedule
+from schedulers import linear_beta_schedule, cosine_beta_schedule
 from model import Unet
 import torch.nn.functional as F
 from tqdm.auto import tqdm
@@ -17,94 +19,81 @@ from skimage.util import montage
 import shutil
 import os
 
+
 class DDIM_Inference_Params:
     timesteps = 1024
     channels = 3
     image_size = 64
 
-    model_path = '/Users/balazsmorvay/Downloads/Azure VM/facediffusion/model_weights/model_epoch_399ema.pth'
-    batch_size = 512
+    model_path = '/home/oem/facediffusion/results/model_epoch_399ema.pth'
+    batch_size = 4
+    dataset_path = "/home/oem/FDF/val"
+    beta_schedule = ""
+
 
 inference_params = DDIM_Inference_Params()
 
-class Schedule:
-    def __init__(self, steps):
-        self.steps = steps
-
-        # define beta schedule
-        self.betas: torch.Tensor = linear_beta_schedule(timesteps=steps)
-
-        # define alphas
-        self.alphas: torch.Tensor = 1. - self.betas
-        self.alphas_cumprod = torch.cumprod(self.alphas, axis=0)
-        self.alphas_cumprod_prev = F.pad(self.alphas_cumprod[:-1], (1, 0), value=1.0)
-        self.sqrt_recip_alphas = torch.sqrt(1.0 / self.alphas)
-
-        # calculations for diffusion q(x_t | x_{t-1}) and others
-        self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)
-        self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - self.alphas_cumprod)
-        self.sqrt_alphas_cumprod_prev = torch.sqrt(self.alphas_cumprod_prev)
-        self.sqrt_one_minus_alphas_cumprod_prev = torch.sqrt(1. - self.alphas_cumprod_prev)
-
-        # calculations for posterior q(x_{t-1} | x_t, x_0) variance (beta)
-        self.posterior_variance = self.betas * (1. - self.alphas_cumprod_prev) / (1. - self.alphas_cumprod)
-
-        self.sqrt_recip_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod)
-        self.sqrt_recipm1_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod - 1)
+@torch.inference_mode()
+def compute_alpha(beta, t):
+    beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
+    a = (1 - beta).cumprod(dim=0).index_select(0, t + 1).view(-1, 1, 1, 1)
+    return a
 
 @torch.inference_mode()
-def predict_xstart_from_eps(schedule, x_t, t, eps):
-    assert x_t.shape == eps.shape
-    return (
-            extract(schedule.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t
-            - extract(schedule.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * eps
-    )
+def generalized_steps(x, seq, model, b, init_images: torch.Tensor):
+    n = x.size(0)
+    eta = 0.0
+    seq_next = [-1] + list(seq[:-1])
+    xt = x
+    for i, j in tqdm(zip(reversed(seq), reversed(seq_next)), total=len(seq)):
+        t = (torch.ones(n) * i).to(x.device)
+        next_t = (torch.ones(n) * j).to(x.device)
+        at = compute_alpha(b, t.long())
+        at_next = compute_alpha(b, next_t.long())
+        et = model(xt, t)
+        x0_t = (xt - et * (1 - at).sqrt()) / at.sqrt() # denoised observation, which is a predicition of x_0, given x_t
+        c1 = (
+            eta * ((1 - at / at_next) * (1 - at_next) / (1 - at)).sqrt() # sigma_t
+        )
+        c2 = ((1 - at_next) - c1 ** 2).sqrt() # part of the "direction pointing to x_t"
+        xt_next = at_next.sqrt() * x0_t + c1 * torch.randn_like(x) + c2 * et # get x_t-1 from x_t
+        xt_next = torch.where(init_images == 0, xt_next, init_images)
+        xt = xt_next
+
+    return xt
+
 
 @torch.inference_mode()
-def ddim_sample_mean(schedule, model, x, t):
-    """
-    Returns the mean of the ddim reverse process q(x_t | x_t-1, x_0)
-    """
-    sqrt_alphas_cumprod_prev_extr = extract(schedule.sqrt_alphas_cumprod_prev, t, x.shape)
-    sqrt_one_minus_alphas_cumprod_prev_extr = extract(schedule.sqrt_one_minus_alphas_cumprod_prev, t, x.shape)
-
-    pred_noise = model(x, t)
-    pred_x0 = predict_xstart_from_eps(schedule, x, t, pred_noise)
-
-    pred_mean = pred_x0 * sqrt_alphas_cumprod_prev_extr + sqrt_one_minus_alphas_cumprod_prev_extr * pred_noise
-    return pred_mean
-
-@torch.inference_mode()
-def p_sample_loop(model, shape, device, img2inpaint=None):
-    b = shape[0]
-    schedule = Schedule(inference_params.timesteps)
-    # start from pure noise (for each example in the batch)
-    img = torch.randn(shape if img2inpaint is None else img2inpaint.shape, device=device)
-    if img2inpaint is not None:
-        img = torch.where(img2inpaint == 0, img, img2inpaint)
-    imgs = []
-
-    for i in tqdm(reversed(range(0, inference_params.timesteps)), desc='reverse process time step', total=inference_params.timesteps):
-        img = ddim_sample_mean(schedule=schedule,
-                               model=model,
-                               x=img,
-                               t=torch.full((b,), i, device=device, dtype=torch.long))
-
-        if img2inpaint is not None:
-            img = torch.where(img2inpaint == 0, img, img2inpaint)
-        imgs.append(img.cpu().numpy())
-    return imgs
-
-@torch.inference_mode()
-def sample(model, image_size, batch_size, channels, device, img2inpaint=None):
-    return p_sample_loop(model, shape=(batch_size, channels, image_size, image_size), device=device,
-                         img2inpaint=img2inpaint)
-
+def sample_image(timesteps: int, device: str, model_fn, init_images: torch.Tensor):
+    skip = inference_params.timesteps // timesteps
+    seq = range(0, inference_params.timesteps, skip) # tau-s
+    random_noise = torch.randn(size=(inference_params.batch_size, inference_params.channels, inference_params.image_size, inference_params.image_size), device=device)
+    input_images = torch.where(init_images == 0, random_noise, init_images)
+    betas = linear_beta_schedule(inference_params.timesteps).to(device)
+    images = generalized_steps(x=input_images, seq=seq, model=model_fn, b=betas, init_images=init_images)
+    return images
 
 
 if __name__ == '__main__':
 
-    os.makedirs('generated_images', exist_ok=True)
+    img_transform = Compose([
+        ToTensor(),  # turn into Numpy array of shape HWC, divide by 255
+        Resize(inference_params.image_size),
+        CenterCrop(inference_params.image_size),
+        Lambda(lambda t: (t * 2) - 1),
+    ])
+
+    mask_transform = Compose([
+        Resize(inference_params.image_size),
+        CenterCrop(inference_params.image_size),
+    ])
+
+    dataset = FDF256Dataset(dirpath=inference_params.dataset_path, load_keypoints=True,
+                            img_transform=img_transform, mask_transform=mask_transform, load_masks=True)
+    dataloader = DataLoader(dataset, batch_size=inference_params.batch_size, shuffle=True, num_workers=1,
+                            prefetch_factor=1, persistent_workers=False, pin_memory=False)
+
+    os.makedirs('generated_images_ddim', exist_ok=True)
     os.makedirs('original_images', exist_ok=True)
     os.makedirs('masked_images', exist_ok=True)
 
@@ -116,7 +105,7 @@ if __name__ == '__main__':
         dim=inference_params.image_size,
         channels=inference_params.channels,
         dim_mults=(1, 2, 4,),
-        self_condition_dim=(7 * 2) #if dataset.load_keypoints else None)
+        self_condition_dim=(7 * 2 if dataset.load_keypoints else None)
     )
 
     model = torch.nn.DataParallel(model)
@@ -124,17 +113,21 @@ if __name__ == '__main__':
     model.load_state_dict(torch.load(Path(inference_params.model_path), map_location=torch.device(device)))
     model.eval()
 
-    #og_keypoints = torch.tensor(data=[[]])
-    #model_fn = partial(model, x_self_cond=og_keypoints)
+    og_data = next(iter(dataloader))
+    og_keypoints = og_data['keypoints'].to(device)
+    og_keypoints = rearrange(og_keypoints.view(og_data['img'].shape[0], -1), "b c -> b c 1 1")
+    model_fn = partial(model, x_self_cond=og_keypoints)
+    img2inpaint = og_data['img'].to(device) * og_data['mask'].to(device)
 
-    samples = sample(model,
+    """samples = sample(model_fn,
                      image_size=inference_params.image_size,
                      batch_size=inference_params.batch_size,
                      channels=inference_params.channels,
                      device=device,
-                     img2inpaint=None)
+                     img2inpaint=img2inpaint)
+    """
 
-    for i in range(inference_params.batch_size):
-        image = rearrange(samples[-1][i], 'c h w -> h w c')
-        plt.imsave(f'generated_images/{i}.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
-
+    samples = sample_image(timesteps = 64, device = device, model_fn = model_fn, init_images=img2inpaint)
+    samples = rearrange(samples, "b c h w -> b h w c")
+    for i, sample in enumerate(samples):
+        plt.imsave(f'generated_images_ddim/{i}.jpeg', np.asarray((sample.to('cpu') + 1) / 2 * 255, dtype=np.uint8))
