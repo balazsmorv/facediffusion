@@ -26,7 +26,7 @@ class DDIM_Inference_Params:
     image_size = 64
 
     model_path = '/home/oem/facediffusion/results/model_epoch_399ema.pth'
-    batch_size = 4
+    batch_size = 96
     dataset_path = "/home/oem/FDF/val"
     beta_schedule = ""
 
@@ -45,7 +45,7 @@ def generalized_steps(x, seq, model, b, init_images: torch.Tensor):
     eta = 0.0
     seq_next = [-1] + list(seq[:-1])
     xt = x
-    for i, j in tqdm(zip(reversed(seq), reversed(seq_next)), total=len(seq)):
+    for i, j in zip(reversed(seq), reversed(seq_next)):
         t = (torch.ones(n) * i).to(x.device)
         next_t = (torch.ones(n) * j).to(x.device)
         at = compute_alpha(b, t.long())
@@ -67,7 +67,7 @@ def generalized_steps(x, seq, model, b, init_images: torch.Tensor):
 def sample_image(timesteps: int, device: str, model_fn, init_images: torch.Tensor):
     skip = inference_params.timesteps // timesteps
     seq = range(0, inference_params.timesteps, skip) # tau-s
-    random_noise = torch.randn(size=(inference_params.batch_size, inference_params.channels, inference_params.image_size, inference_params.image_size), device=device)
+    random_noise = torch.randn(size=(init_images.shape[0], inference_params.channels, inference_params.image_size, inference_params.image_size), device=device)
     input_images = torch.where(init_images == 0, random_noise, init_images)
     betas = linear_beta_schedule(inference_params.timesteps).to(device)
     images = generalized_steps(x=input_images, seq=seq, model=model_fn, b=betas, init_images=init_images)
@@ -90,7 +90,7 @@ if __name__ == '__main__':
 
     dataset = FDF256Dataset(dirpath=inference_params.dataset_path, load_keypoints=True,
                             img_transform=img_transform, mask_transform=mask_transform, load_masks=True)
-    dataloader = DataLoader(dataset, batch_size=inference_params.batch_size, shuffle=True, num_workers=1,
+    dataloader = DataLoader(dataset, batch_size=inference_params.batch_size, shuffle=False, num_workers=8,
                             prefetch_factor=1, persistent_workers=False, pin_memory=False)
 
     os.makedirs('generated_images_ddim', exist_ok=True)
@@ -113,21 +113,14 @@ if __name__ == '__main__':
     model.load_state_dict(torch.load(Path(inference_params.model_path), map_location=torch.device(device)))
     model.eval()
 
-    og_data = next(iter(dataloader))
-    og_keypoints = og_data['keypoints'].to(device)
-    og_keypoints = rearrange(og_keypoints.view(og_data['img'].shape[0], -1), "b c -> b c 1 1")
-    model_fn = partial(model, x_self_cond=og_keypoints)
-    img2inpaint = og_data['img'].to(device) * og_data['mask'].to(device)
+    for index, og_data in tqdm(enumerate(dataloader), total=len(dataloader), desc='Image generation on the validation set'):
+        og_keypoints = og_data['keypoints'].to(device)
+        og_keypoints = rearrange(og_keypoints.view(og_data['img'].shape[0], -1), "b c -> b c 1 1")
+        model_fn = partial(model, x_self_cond=og_keypoints)
+        img2inpaint = og_data['img'].to(device) * og_data['mask'].to(device)
 
-    """samples = sample(model_fn,
-                     image_size=inference_params.image_size,
-                     batch_size=inference_params.batch_size,
-                     channels=inference_params.channels,
-                     device=device,
-                     img2inpaint=img2inpaint)
-    """
-
-    samples = sample_image(timesteps = 64, device = device, model_fn = model_fn, init_images=img2inpaint)
-    samples = rearrange(samples, "b c h w -> b h w c")
-    for i, sample in enumerate(samples):
-        plt.imsave(f'generated_images_ddim/{i}.jpeg', np.asarray((sample.to('cpu') + 1) / 2 * 255, dtype=np.uint8))
+        samples = sample_image(timesteps = 16, device = device, model_fn = model_fn, init_images=img2inpaint)
+        samples = rearrange(samples, "b c h w -> b h w c")
+        for i, sample in enumerate(samples):
+            number = index * inference_params.batch_size + i
+            plt.imsave(f'ddim_generated_images_16/{number}.jpeg', np.asarray((sample.to('cpu') + 1) / 2 * 255, dtype=np.uint8))
