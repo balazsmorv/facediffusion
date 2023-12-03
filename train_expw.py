@@ -22,20 +22,21 @@ import os
 
 TRAIN_CFG = {
     # Model and train parameters
-    'lr': 5e-6,
+    'lr': 5e-5,
     'epochs': 10000,
     'timesteps': 1024,
     'channels': 3,
 
     # Dataset params
-    'dataset_pth': "/home/oem/Letöltések/Facialexp",
+    #'dataset_pth': "/home/oem/Letöltések/Facialexp",
+    'dataset_pth': "/Users/balazsmorvay/Downloads/FacialExpressionsTrainingData",
     'load_keypoints': True,
     'load_masks': True,
-    'image_size': 96,
-    'batch_size': 12,
+    'image_size': 64,
+    'batch_size': 96,
 
     # Logging parameters
-    'experiment_name': 'emotion_model',
+    'experiment_name': 'emotion_model_64_MBP',
     'eval_freq': 20,
     'save_and_sample_every': 10000,
     'model_checkpoint': None
@@ -91,6 +92,15 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1", masks=None):
 
 
 
+def reverse_transform_fun(t):
+    t = (t + 1) / 2
+    t = t.permute(1, 2, 0)  # CHW to HWC
+    t = t * 255.
+    t =  t.numpy().astype(np.uint8)
+    return t
+
+def img_transform_part(t):
+    return t * 2 - 1
 
 if __name__ == '__main__':
 
@@ -131,7 +141,7 @@ if __name__ == '__main__':
         ToTensor(),  # turn into Numpy array of shape HWC, divide by 255
         Resize(image_size),
         CenterCrop(image_size),
-        Lambda(lambda t: (t * 2) - 1),
+        Lambda(img_transform_part),
     ])
 
     mask_transform = Compose([
@@ -139,26 +149,28 @@ if __name__ == '__main__':
         CenterCrop(image_size),
     ])
 
-    reverse_transform = Compose([
-        Lambda(lambda t: (t + 1) / 2),
-        Lambda(lambda t: t.permute(1, 2, 0)),  # CHW to HWC
-        Lambda(lambda t: t * 255.),
-        Lambda(lambda t: t.numpy().astype(np.uint8)),
-    ])
+    reverse_transform = Compose([Lambda(reverse_transform_fun)])
 
     results_folder = Path("./results")
     results_folder.mkdir(exist_ok=True)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(torch.cuda.is_available())
-    print(torch.cuda.device_count())
+    if torch.backends.mps.is_available():
+        device = 'mps'
+        print('MPS available')
+    elif torch.cuda.is_available():
+        device = 'cuda'
+        print('CUDA available')
+        print(torch.cuda.device_count())
+    else:
+        device = 'cpu'
 
     dataset = FacialExpressionsWithKeypointsDataset(csv_file=os.path.join(TRAIN_CFG['dataset_pth'],
                                                                           'labels_with_kpts.csv'),
                                                     root_dir=TRAIN_CFG['dataset_pth'],
                                                     img_transform=img_transform,
-                                                    mask_transform=mask_transform)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=12,
+                                                    mask_transform=mask_transform,
+                                                    imsize=image_size)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=6,
                             prefetch_factor=2, persistent_workers=True, pin_memory=True)
 
     model = Unet(
@@ -222,7 +234,7 @@ if __name__ == '__main__':
                     # all_images_list = list(
                     #    map(lambda n: sample(model, image_size=image_size, batch_size=n, channels=channels, img2inpaint=data*masks), batches))
                     all_images_list = sample(ema, image_size=image_size, batch_size=batch_size, channels=channels,
-                                             img2inpaint=data * masks, device='cuda')
+                                             img2inpaint=data * masks, device=device)
                     imlist = all_images_list  # [0]
                     lst = [torch.from_numpy(item) for item in imlist]
                     all_images = torch.cat(lst, dim=0)

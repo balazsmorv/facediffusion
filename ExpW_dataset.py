@@ -19,18 +19,19 @@ class FacialExpressionsWithKeypointsDataset(Dataset):
         "6" "neutral"
     """
 
-    def __init__(self, csv_file, root_dir, img_transform: torch.nn.Module, mask_transform: torch.nn.Module = None):
+    def __init__(self, csv_file, root_dir, img_transform: torch.nn.Module, mask_transform: torch.nn.Module = None, imsize: int = 96):
         self.labels = pd.read_csv(csv_file, index_col='idx')
         self.root_dir = root_dir
         self.img_transform = img_transform
         self.mask_transform = mask_transform
+        self.imsize = imsize
 
     def __len__(self):
         return len(self.labels)
 
     def get_mask(self, idx):
-        mask = torch.ones((1, 96, 96), dtype=torch.bool)
-        bounding_box = self.labels.iloc[idx, 17:] * 96
+        mask = torch.ones((1, self.imsize, self.imsize), dtype=torch.bool)
+        bounding_box = self.labels.iloc[idx, 17:] * self.imsize
         x0, y0, x1, y1 = bounding_box
         mask[:, int(y0):int(y1), int(x0):int(x1)] = 0
         return mask
