@@ -3,41 +3,8 @@ import os
 from PIL import Image
 import torch
 import pandas as pd
-import torchvision.transforms.functional as TF
+import numpy as np
 
-
-class FacialExpressionsDataset(Dataset):
-
-    def __init__(self, csv_file: str, root_dir: str, transform=None):
-        self.labels = pd.read_csv(csv_file, index_col='idx')
-        self.root_dir = root_dir
-        self.transform = transform
-
-    def __len__(self):
-        return len(self.labels)
-
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-
-        image_path = os.path.join(self.root_dir, self.labels.iloc[idx, 0])
-        image = Image.open(image_path)
-        image_tensor = TF.to_tensor(image)
-        
-        label = self.labels.iloc[idx, 1].astype('int')
-        impath = self.labels.iloc[idx, 0]
-        
-        keypoints = torch.tensor(data=[self.labels.iloc[idx, 3:]])
-        keypoints = torch.reshape(keypoints, shape=(7, 2))
-
-        sample = {'image': image_tensor, 'label': label, 'keypoints': keypoints, 'impath': impath, 'idx': idx}
-
-        if self.transform:
-            sample = self.transform(sample)
-
-        return sample
-    
-    
 
 class FacialExpressionsWithKeypointsDataset(Dataset):
     """
@@ -52,34 +19,51 @@ class FacialExpressionsWithKeypointsDataset(Dataset):
         "6" "neutral"
     """
 
-    def __init__(self, csv_file, root_dir, transform=None):
+    def __init__(self, csv_file, root_dir, img_transform: torch.nn.Module, mask_transform: torch.nn.Module = None):
         self.labels = pd.read_csv(csv_file, index_col='idx')
         self.root_dir = root_dir
-        self.transform = transform
+        self.img_transform = img_transform
+        self.mask_transform = mask_transform
 
     def __len__(self):
         return len(self.labels)
+
+    def get_mask(self, idx):
+        mask = torch.ones((1, 96, 96), dtype=torch.bool)
+        bounding_box = self.labels.iloc[idx, 17:] * 96
+        x0, y0, x1, y1 = bounding_box
+        mask[:, int(y0):int(y1), int(x0):int(x1)] = 0
+        return mask
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
         image_path = os.path.join(self.root_dir, self.labels.iloc[idx, 0])
-        image = Image.open(image_path)
-        image_tensor = TF.to_tensor(image)
+        with Image.open(image_path) as fp:
+            im = np.array(fp)
+        image = self.img_transform(im)
         
         label = self.labels.iloc[idx, 1].astype('int')
+        one_hot_label = torch.zeros(size=(7,))
+        one_hot_label[label-1] = 1
         impath = self.labels.iloc[idx, 0]
+
+        masks = self.get_mask(idx)
+        if self.mask_transform is not None:
+            masks = self.mask_transform(masks)
         
-        
-        keypoints = torch.tensor(data=[self.labels.iloc[idx, 3:17]])
-        keypoints = torch.reshape(keypoints, shape=(7, 2))
-        
+        keypoints = torch.tensor(data=[self.labels.iloc[idx, 3:13]], dtype=torch.float)
+        keypoints = torch.squeeze(keypoints)
+
         bounding_boxes = torch.tensor(data=self.labels.iloc[idx, 17:])
 
-        sample = {'image': image_tensor, 'label': label, 'keypoints': keypoints, 'impath': impath, 'idx': idx, 'bbox': bounding_boxes}
-
-        if self.transform:
-            sample = self.transform(sample)
+        sample = {'image': image,
+                  'label': one_hot_label,
+                  'keypoints': keypoints,
+                  'impath': impath,
+                  'idx': idx,
+                  'bbox': bounding_boxes,
+                  'mask': masks}
 
         return sample

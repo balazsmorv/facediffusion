@@ -13,34 +13,34 @@ from functools import partial
 from einops import rearrange
 from ema_pytorch import EMA
 from datetime import datetime
-from fdh256_dataset import FDF256Dataset
+from ExpW_dataset import FacialExpressionsWithKeypointsDataset
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from network_helper import extract
 from inference import sample
+import os
 
 TRAIN_CFG = {
     # Model and train parameters
-    'lr': 5e-5,
-    'epochs': 1,
+    'lr': 5e-6,
+    'epochs': 10000,
     'timesteps': 1024,
     'channels': 3,
 
     # Dataset params
-    'dataset_pth': "/home/oem/FDF/train",
+    'dataset_pth': "/home/oem/Letöltések/Facialexp",
     'load_keypoints': True,
     'load_masks': True,
-    'image_size': 64,
-    'batch_size': 32,
+    'image_size': 96,
+    'batch_size': 12,
 
     # Logging parameters
-    'experiment_name': 'model',
-    'eval_freq': 10,
+    'experiment_name': 'emotion_model',
+    'eval_freq': 20,
     'save_and_sample_every': 10000,
     'model_checkpoint': None
     # '/home/jovyan/work/nas/USERS/tormaszabolcs/GIT/facediffusion/results/64x64_result_mask_part1/model_epoch_139.pth'
 }
-
 
 def num_to_groups(num, divisor):
     groups = num // divisor
@@ -88,6 +88,8 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1", masks=None):
         raise NotImplementedError()
 
     return loss
+
+
 
 
 if __name__ == '__main__':
@@ -151,16 +153,19 @@ if __name__ == '__main__':
     print(torch.cuda.is_available())
     print(torch.cuda.device_count())
 
-    dataset = FDF256Dataset(dirpath=dataset_pth, load_keypoints=load_keypoints, img_transform=img_transform,
-                            load_masks=load_masks, mask_transform=mask_transform)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=10,
+    dataset = FacialExpressionsWithKeypointsDataset(csv_file=os.path.join(TRAIN_CFG['dataset_pth'],
+                                                                          'labels_with_kpts.csv'),
+                                                    root_dir=TRAIN_CFG['dataset_pth'],
+                                                    img_transform=img_transform,
+                                                    mask_transform=mask_transform)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=12,
                             prefetch_factor=2, persistent_workers=True, pin_memory=True)
 
     model = Unet(
         dim=image_size,
         channels=channels,
         dim_mults=(1, 2, 4,),
-        self_condition_dim=(7 * 2 if dataset.load_keypoints else None)
+        self_condition_dim = 5 * 2 + 7 # 5 keypoints + emotion label one hot
     )
     model = torch.nn.DataParallel(model)
     if TRAIN_CFG['model_checkpoint'] is not None:
@@ -169,60 +174,55 @@ if __name__ == '__main__':
     optimizer = Adam(model.parameters(), lr=lr)
 
     ema = EMA(model, beta=0.9999, update_after_step=100, update_every=10)
+    
+    s = 0
 
     for epoch in range(epochs):
         model.train()
 
-        for step, batch in enumerate(tqdm(dataloader)):
+        pbar = tqdm(dataloader)
+        for step, batch in enumerate(pbar):
+            s += 1
             optimizer.zero_grad()
 
-            if not dataset.load_keypoints:
-                data = batch.to(device)
-            else:
-                data = batch['img'].to(device)
-
-            if dataset.load_masks:
-                masks = batch['mask'].to(device)
-            else:
-                masks = None
+            data = batch['image'].to(device)
+            masks = batch['mask'].to(device)
 
             batch_size = data.shape[0]
 
             # Algorithm 1 line 3: sample t uniformally for every example in the batch
             t = torch.randint(0, timesteps, (batch_size,), device=device).long()
 
-            if not dataset.load_keypoints:
-                model_fn = model
-            else:
-                keypoints = batch['keypoints'].to(device)
-                keypoints = rearrange(keypoints.view(batch_size, -1), "b c -> b c 1 1")
-                model_fn = partial(model, x_self_cond=keypoints)
+            keypoints = batch['keypoints'].to(device)
+            emotion = batch['label'].to(device).float()
+            condition = torch.cat((keypoints, emotion), dim=1)
+            condition = rearrange(condition, 'b c -> b c 1 1')
+            model_fn = partial(model, x_self_cond=condition)
             loss = p_losses(model_fn, data, t, loss_type="huber", masks=masks)
 
             if step % 100 == 0:
-                print("Loss:", loss.item())
-
-            writer.add_scalar("loss", loss, epoch)
+                pbar.set_description(f"Epoch {epoch+1}. Loss = {loss}")
+                writer.add_scalar("loss", loss, s)
 
             loss.backward()
             optimizer.step()
 
             ema.update()
 
-        if (epoch + 1) % eval_freq == 0:
+        if epoch % eval_freq == 0:
             with torch.inference_mode():
                 try:
                     #torch.save(model.state_dict(),
                     #           Path("./results/" + experiment_name + "_epoch_" + str(epoch) + ".pth"))
                     torch.save(ema.ema_model.state_dict(),
-                               Path("./results/" + experiment_name + datetime.strftime("%m_%d_%Y_%H_%M_%S") + "_epoch_" + str(epoch) + "ema.pth"))
+                               Path("./results/" + experiment_name + "_epoch_" + str(epoch) + "ema.pth"))
                     ema.eval()
                     milestone = step // save_and_sample_every
                     batches = num_to_groups(4, batch_size)
                     # all_images_list = list(
                     #    map(lambda n: sample(model, image_size=image_size, batch_size=n, channels=channels, img2inpaint=data*masks), batches))
                     all_images_list = sample(ema, image_size=image_size, batch_size=batch_size, channels=channels,
-                                             img2inpaint=data * masks)
+                                             img2inpaint=data * masks, device='cuda')
                     imlist = all_images_list  # [0]
                     lst = [torch.from_numpy(item) for item in imlist]
                     all_images = torch.cat(lst, dim=0)
@@ -233,7 +233,7 @@ if __name__ == '__main__':
                     print(e)
 
     # save model
-    torch.save(model.state_dict(), Path("./results/" + experiment_name + ".pth"))
+    torch.save(ema.ema_model.state_dict(), Path("./results/" + experiment_name + "_final.pth"))
 
     writer.flush()
     writer.close()

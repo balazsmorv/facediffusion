@@ -13,6 +13,7 @@ generated_images/
 generated_images_ddim/
 Coginfocom/
 BasicSR/
+runs/
 develop-eggs/
 dist/
 downloads/

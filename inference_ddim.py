@@ -25,7 +25,7 @@ class DDIM_Inference_Params:
     channels = 3
     image_size = 64
 
-    model_path = '/home/oem/facediffusion/results/model_epoch_399ema.pth'
+    model_path = '/home/oem/facediffusion/results/model.pth'
     batch_size = 96
     dataset_path = "/home/oem/FDF/val"
     beta_schedule = ""
@@ -123,4 +123,4 @@ if __name__ == '__main__':
         samples = rearrange(samples, "b c h w -> b h w c")
         for i, sample in enumerate(samples):
             number = index * inference_params.batch_size + i
-            plt.imsave(f'ddim_generated_images_16/{number}.jpeg', np.asarray((sample.to('cpu') + 1) / 2 * 255, dtype=np.uint8))
+            plt.imsave(f'/home/oem/facediffusion/results/ddim_generated_images_epoch1_16/{number}.jpeg', np.asarray((sample.to('cpu') + 1) / 2 * 255, dtype=np.uint8))
