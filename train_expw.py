@@ -26,6 +26,7 @@ TRAIN_CFG = {
     'epochs': 10000,
     'timesteps': 1024,
     'channels': 3,
+    'condition_dim': 0,
 
     # Dataset params
     'dataset_pth': "/home/oem/Letöltések/Facialexp",
@@ -36,11 +37,12 @@ TRAIN_CFG = {
     'batch_size': 40,
 
     # Logging parameters
-    'experiment_name': 'emotion_model_64_MBP_continue_after_20',
+    'experiment_name': 'emotion_model_no_conditioning',
+    'experiment description': 'No conditioning',
     'eval_freq': 30,
     'save_and_sample_every': 10000,
-    #'model_checkpoint': None
-    'model_checkpoint': '/home/oem/Desktop/emotion_model_64_MBP_epoch_20ema.pth'
+    'model_checkpoint': None
+    #'model_checkpoint': '/home/oem/Desktop/emotion_model_64_MBP_epoch_20ema.pth'
 }
 
 def num_to_groups(num, divisor):
@@ -107,6 +109,7 @@ if __name__ == '__main__':
     load_keypoints = TRAIN_CFG['load_keypoints']
     load_masks = TRAIN_CFG["load_masks"]
     writer = SummaryWriter()
+    writer.add_hparams(TRAIN_CFG)
 
     torch.manual_seed(0)
 
@@ -168,7 +171,7 @@ if __name__ == '__main__':
         dim=image_size,
         channels=channels,
         dim_mults=(1, 2, 4,),
-        self_condition_dim = 5 * 2 + 7 # 5 keypoints + emotion label one hot
+        self_condition_dim=TRAIN_CFG['condition_dim'] # 5 keypoints + emotion label one hot
     )
     model = torch.nn.DataParallel(model)
     if TRAIN_CFG['model_checkpoint'] is not None:
@@ -196,11 +199,15 @@ if __name__ == '__main__':
             # Algorithm 1 line 3: sample t uniformally for every example in the batch
             t = torch.randint(0, timesteps, (batch_size,), device=device).long()
 
-            keypoints = batch['keypoints'].to(device)
-            emotion = batch['label'].to(device).float()
-            condition = torch.cat((keypoints, emotion), dim=1)
-            condition = rearrange(condition, 'b c -> b c 1 1')
-            model_fn = partial(model, x_self_cond=condition)
+            if TRAIN_CFG['condition_dim'] > 0:
+                keypoints = batch['keypoints'].to(device)
+                emotion = batch['label'].to(device).float()
+                condition = torch.cat((keypoints, emotion), dim=1)
+                condition = rearrange(condition, 'b c -> b c 1 1')
+                model_fn = partial(model, x_self_cond=condition)
+            else:
+                model_fn = model
+            
             loss = p_losses(model_fn, data, t, loss_type="huber", masks=masks)
 
             if step % 100 == 0:
