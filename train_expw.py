@@ -28,19 +28,19 @@ TRAIN_CFG = {
     'channels': 3,
 
     # Dataset params
-    #'dataset_pth': "/home/oem/Letöltések/Facialexp",
-    'dataset_pth': "/Users/balazsmorvay/Downloads/FacialExpressionsTrainingData",
+    'dataset_pth': "/home/oem/Letöltések/Facialexp",
+    #'dataset_pth': "/Users/balazsmorvay/Downloads/FacialExpressionsTrainingData",
     'load_keypoints': True,
     'load_masks': True,
     'image_size': 64,
-    'batch_size': 96,
+    'batch_size': 40,
 
     # Logging parameters
-    'experiment_name': 'emotion_model_64_MBP',
-    'eval_freq': 20,
+    'experiment_name': 'emotion_model_64_MBP_continue_after_20',
+    'eval_freq': 30,
     'save_and_sample_every': 10000,
-    'model_checkpoint': None
-    # '/home/jovyan/work/nas/USERS/tormaszabolcs/GIT/facediffusion/results/64x64_result_mask_part1/model_epoch_139.pth'
+    #'model_checkpoint': None
+    'model_checkpoint': '/home/oem/Desktop/emotion_model_64_MBP_epoch_20ema.pth'
 }
 
 def num_to_groups(num, divisor):
@@ -91,17 +91,6 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1", masks=None):
     return loss
 
 
-
-def reverse_transform_fun(t):
-    t = (t + 1) / 2
-    t = t.permute(1, 2, 0)  # CHW to HWC
-    t = t * 255.
-    t =  t.numpy().astype(np.uint8)
-    return t
-
-def img_transform_part(t):
-    return t * 2 - 1
-
 if __name__ == '__main__':
 
     # CONFIG SETUPS
@@ -141,7 +130,7 @@ if __name__ == '__main__':
         ToTensor(),  # turn into Numpy array of shape HWC, divide by 255
         Resize(image_size),
         CenterCrop(image_size),
-        Lambda(img_transform_part),
+        Lambda(lambda t: (t * 2) - 1),
     ])
 
     mask_transform = Compose([
@@ -149,15 +138,17 @@ if __name__ == '__main__':
         CenterCrop(image_size),
     ])
 
-    reverse_transform = Compose([Lambda(reverse_transform_fun)])
+    reverse_transform = Compose([
+        Lambda(lambda t: (t + 1) / 2),
+        Lambda(lambda t: t.permute(1, 2, 0)),  # CHW to HWC
+        Lambda(lambda t: t * 255.),
+        Lambda(lambda t: t.numpy().astype(np.uint8)),
+    ])
 
     results_folder = Path("./results")
     results_folder.mkdir(exist_ok=True)
 
-    if torch.backends.mps.is_available():
-        device = 'mps'
-        print('MPS available')
-    elif torch.cuda.is_available():
+    if torch.cuda.is_available():
         device = 'cuda'
         print('CUDA available')
         print(torch.cuda.device_count())
@@ -230,17 +221,15 @@ if __name__ == '__main__':
                                Path("./results/" + experiment_name + "_epoch_" + str(epoch) + "ema.pth"))
                     ema.eval()
                     milestone = step // save_and_sample_every
-                    batches = num_to_groups(4, batch_size)
                     # all_images_list = list(
                     #    map(lambda n: sample(model, image_size=image_size, batch_size=n, channels=channels, img2inpaint=data*masks), batches))
                     all_images_list = sample(ema, image_size=image_size, batch_size=batch_size, channels=channels,
                                              img2inpaint=data * masks, device=device)
-                    imlist = all_images_list  # [0]
-                    lst = [torch.from_numpy(item) for item in imlist]
-                    all_images = torch.cat(lst, dim=0)
-                    all_images = (all_images + 1) * 0.5
-                    writer.add_images("Images", all_images, epoch)
-                    save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
+                    im = all_images_list[-1]
+                    im = torch.from_numpy(im)
+                    im = (im + 1) * 0.5
+                    writer.add_images("Images", im, epoch)
+                    save_image(im, str(results_folder / f'sample-{milestone}.png'), nrow=6)
                 except Exception as e:
                     print(e)
 
