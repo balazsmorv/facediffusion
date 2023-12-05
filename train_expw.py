@@ -34,7 +34,7 @@ TRAIN_CFG = {
     'load_keypoints': True,
     'load_masks': True,
     'image_size': 64,
-    'batch_size': 40,
+    'batch_size': 32,
 
     # Logging parameters
     'experiment_name': 'emotion_model_no_conditioning',
@@ -109,7 +109,7 @@ if __name__ == '__main__':
     load_keypoints = TRAIN_CFG['load_keypoints']
     load_masks = TRAIN_CFG["load_masks"]
     writer = SummaryWriter()
-    writer.add_hparams(TRAIN_CFG)
+    writer.add_text('hyperparameters', str(TRAIN_CFG))
 
     torch.manual_seed(0)
 
