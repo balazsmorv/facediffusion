@@ -26,21 +26,24 @@ TRAIN_CFG = {
     'epochs': 10000,
     'timesteps': 1024,
     'channels': 3,
+    'condition_dim': 17,
 
     # Dataset params
-    #'dataset_pth': "/home/oem/Letöltések/Facialexp",
-    'dataset_pth': "/Users/balazsmorvay/Downloads/FacialExpressionsTrainingData",
+    'dataset_pth': "/home/oem/Letöltések/Facialexp",
+    'label_file': 'labels_with_kpts_v2.csv',
+    #'dataset_pth': "/Users/balazsmorvay/Downloads/FacialExpressionsTrainingData",
     'load_keypoints': True,
     'load_masks': True,
     'image_size': 64,
-    'batch_size': 96,
+    'batch_size': 32,
 
     # Logging parameters
-    'experiment_name': 'emotion_model_64_MBP',
+    'experiment_name': 'emotion_model_emotion_v2',
+    'experiment description': 'Conditioning on kpts, emotion, using csv v2 labels',
     'eval_freq': 20,
     'save_and_sample_every': 10000,
     'model_checkpoint': None
-    # '/home/jovyan/work/nas/USERS/tormaszabolcs/GIT/facediffusion/results/64x64_result_mask_part1/model_epoch_139.pth'
+    #'model_checkpoint': '/home/oem/facediffusion/results/emotion_model_epoch_220ema.pth'
 }
 
 def num_to_groups(num, divisor):
@@ -91,17 +94,6 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1", masks=None):
     return loss
 
 
-
-def reverse_transform_fun(t):
-    t = (t + 1) / 2
-    t = t.permute(1, 2, 0)  # CHW to HWC
-    t = t * 255.
-    t =  t.numpy().astype(np.uint8)
-    return t
-
-def img_transform_part(t):
-    return t * 2 - 1
-
 if __name__ == '__main__':
 
     # CONFIG SETUPS
@@ -118,6 +110,7 @@ if __name__ == '__main__':
     load_keypoints = TRAIN_CFG['load_keypoints']
     load_masks = TRAIN_CFG["load_masks"]
     writer = SummaryWriter()
+    writer.add_text('hyperparameters', str(TRAIN_CFG))
 
     torch.manual_seed(0)
 
@@ -141,7 +134,7 @@ if __name__ == '__main__':
         ToTensor(),  # turn into Numpy array of shape HWC, divide by 255
         Resize(image_size),
         CenterCrop(image_size),
-        Lambda(img_transform_part),
+        Lambda(lambda t: (t * 2) - 1),
     ])
 
     mask_transform = Compose([
@@ -149,15 +142,17 @@ if __name__ == '__main__':
         CenterCrop(image_size),
     ])
 
-    reverse_transform = Compose([Lambda(reverse_transform_fun)])
+    reverse_transform = Compose([
+        Lambda(lambda t: (t + 1) / 2),
+        Lambda(lambda t: t.permute(1, 2, 0)),  # CHW to HWC
+        Lambda(lambda t: t * 255.),
+        Lambda(lambda t: t.numpy().astype(np.uint8)),
+    ])
 
     results_folder = Path("./results")
     results_folder.mkdir(exist_ok=True)
 
-    if torch.backends.mps.is_available():
-        device = 'mps'
-        print('MPS available')
-    elif torch.cuda.is_available():
+    if torch.cuda.is_available():
         device = 'cuda'
         print('CUDA available')
         print(torch.cuda.device_count())
@@ -165,7 +160,7 @@ if __name__ == '__main__':
         device = 'cpu'
 
     dataset = FacialExpressionsWithKeypointsDataset(csv_file=os.path.join(TRAIN_CFG['dataset_pth'],
-                                                                          'labels_with_kpts.csv'),
+                                                                          TRAIN_CFG['label_file']),
                                                     root_dir=TRAIN_CFG['dataset_pth'],
                                                     img_transform=img_transform,
                                                     mask_transform=mask_transform,
@@ -177,7 +172,7 @@ if __name__ == '__main__':
         dim=image_size,
         channels=channels,
         dim_mults=(1, 2, 4,),
-        self_condition_dim = 5 * 2 + 7 # 5 keypoints + emotion label one hot
+        self_condition_dim=TRAIN_CFG['condition_dim'] # 5 keypoints + emotion label one hot
     )
     model = torch.nn.DataParallel(model)
     if TRAIN_CFG['model_checkpoint'] is not None:
@@ -205,11 +200,15 @@ if __name__ == '__main__':
             # Algorithm 1 line 3: sample t uniformally for every example in the batch
             t = torch.randint(0, timesteps, (batch_size,), device=device).long()
 
-            keypoints = batch['keypoints'].to(device)
-            emotion = batch['label'].to(device).float()
-            condition = torch.cat((keypoints, emotion), dim=1)
-            condition = rearrange(condition, 'b c -> b c 1 1')
-            model_fn = partial(model, x_self_cond=condition)
+            if TRAIN_CFG['condition_dim'] > 0:
+                keypoints = batch['keypoints'].to(device)
+                emotion = batch['label'].to(device).float()
+                condition = torch.cat((keypoints, emotion), dim=1)
+                condition = rearrange(condition, 'b c -> b c 1 1')
+                model_fn = partial(model, x_self_cond=condition)
+            else:
+                model_fn = model
+            
             loss = p_losses(model_fn, data, t, loss_type="huber", masks=masks)
 
             if step % 100 == 0:
@@ -230,17 +229,15 @@ if __name__ == '__main__':
                                Path("./results/" + experiment_name + "_epoch_" + str(epoch) + "ema.pth"))
                     ema.eval()
                     milestone = step // save_and_sample_every
-                    batches = num_to_groups(4, batch_size)
                     # all_images_list = list(
                     #    map(lambda n: sample(model, image_size=image_size, batch_size=n, channels=channels, img2inpaint=data*masks), batches))
                     all_images_list = sample(ema, image_size=image_size, batch_size=batch_size, channels=channels,
                                              img2inpaint=data * masks, device=device)
-                    imlist = all_images_list  # [0]
-                    lst = [torch.from_numpy(item) for item in imlist]
-                    all_images = torch.cat(lst, dim=0)
-                    all_images = (all_images + 1) * 0.5
-                    writer.add_images("Images", all_images, epoch)
-                    save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
+                    im = all_images_list[-1]
+                    im = torch.from_numpy(im)
+                    im = (im + 1) * 0.5
+                    writer.add_images("Images", im, epoch)
+                    save_image(im, str(results_folder / f'sample-{milestone}.png'), nrow=6)
                 except Exception as e:
                     print(e)
 
