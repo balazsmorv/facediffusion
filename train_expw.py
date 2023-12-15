@@ -26,10 +26,11 @@ TRAIN_CFG = {
     'epochs': 10000,
     'timesteps': 1024,
     'channels': 3,
-    'condition_dim': 0,
+    'condition_dim': 17,
 
     # Dataset params
     'dataset_pth': "/home/oem/Letöltések/Facialexp",
+    'label_file': 'labels_with_kpts_v2.csv',
     #'dataset_pth': "/Users/balazsmorvay/Downloads/FacialExpressionsTrainingData",
     'load_keypoints': True,
     'load_masks': True,
@@ -37,12 +38,12 @@ TRAIN_CFG = {
     'batch_size': 32,
 
     # Logging parameters
-    'experiment_name': 'emotion_model_no_conditioning',
-    'experiment description': 'No conditioning',
-    'eval_freq': 30,
+    'experiment_name': 'emotion_model_emotion_v2',
+    'experiment description': 'Conditioning on kpts, emotion, using csv v2 labels',
+    'eval_freq': 20,
     'save_and_sample_every': 10000,
     'model_checkpoint': None
-    #'model_checkpoint': '/home/oem/Desktop/emotion_model_64_MBP_epoch_20ema.pth'
+    #'model_checkpoint': '/home/oem/facediffusion/results/emotion_model_epoch_220ema.pth'
 }
 
 def num_to_groups(num, divisor):
@@ -159,7 +160,7 @@ if __name__ == '__main__':
         device = 'cpu'
 
     dataset = FacialExpressionsWithKeypointsDataset(csv_file=os.path.join(TRAIN_CFG['dataset_pth'],
-                                                                          'labels_with_kpts.csv'),
+                                                                          TRAIN_CFG['label_file']),
                                                     root_dir=TRAIN_CFG['dataset_pth'],
                                                     img_transform=img_transform,
                                                     mask_transform=mask_transform,
