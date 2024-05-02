@@ -9,6 +9,11 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+generated_images/
+generated_images_ddim/
+Coginfocom/
+BasicSR/
+runs/
 develop-eggs/
 dist/
 downloads/

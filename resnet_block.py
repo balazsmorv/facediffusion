@@ -86,7 +86,7 @@ class ResnetBlock(nn.Module):
         cond_scale_shift = None
         if exists(self.cond_embed) and exists(condition):
             cond_embed = self.cond_embed(condition)
-            cond_scale_shift = cond_embed.chunk(2, dim=1)
+            cond_scale_shift = cond_embed.chunk(2, dim=1) # scale, shift
 
         h = self.block2(h, scale_shift=cond_scale_shift)
 

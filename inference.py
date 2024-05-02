@@ -17,22 +17,23 @@ from skimage.util import montage
 import shutil
 import os
 
+
 INFERENCE_CFG = {
     # Model and train parameters
     'timesteps': 1024,
     'channels': 3,
 
     # Dataset params
-    'dataset_pth': "/home/jovyan/work/nas/USERS/tormaszabolcs/DATA/FDF256/FDF/data/val",
+    'dataset_pth': "/home/oem/FDF/val",
     'load_keypoints': True,
     'image_size': 64,
-    'batch_size': 16,
+    'batch_size': 4,
 
     # Logging parameters
-    'experiment_name': 'model_epoch_179',
+    'experiment_name': 'model_epoch_399ema',
+    'model_path': '/home/oem/facediffusion/results/model_epoch_399ema.pth',
     'save_montage': False
 }
-
 
 @torch.no_grad()
 def p_sample(model, x, t, t_index):
@@ -60,11 +61,12 @@ def p_sample(model, x, t, t_index):
 
 
 @torch.no_grad()
-def p_sample_loop(model, shape, device="cuda", img2inpaint=None):
+def p_sample_loop(model, shape, device, img2inpaint=None):
     b = shape[0]
     # start from pure noise (for each example in the batch)
     img = torch.randn(shape if img2inpaint is None else img2inpaint.shape, device=device)
-    img = torch.where(img2inpaint == 0, img, img2inpaint)
+    if img2inpaint is not None:
+        img = torch.where(img2inpaint == 0, img, img2inpaint)
     imgs = []
 
     for i in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=timesteps):
@@ -76,14 +78,14 @@ def p_sample_loop(model, shape, device="cuda", img2inpaint=None):
 
 
 @torch.no_grad()
-def sample(model, image_size, batch_size=16, channels=3, device="cuda", img2inpaint=None):
-    return p_sample_loop(model, shape=(batch_size, channels, image_size, image_size), device="cuda",
+def sample(model, image_size, batch_size, channels, device, img2inpaint=None):
+    return p_sample_loop(model, shape=(batch_size, channels, image_size, image_size), device=device,
                          img2inpaint=img2inpaint)
 
 
-os.makedirs('generated_images')
-os.makedirs('original_images')
-os.makedirs('masked_images')
+os.makedirs('generated_images', exist_ok=True)
+os.makedirs('original_images', exist_ok=True)
+os.makedirs('masked_images', exist_ok=True)
 
 experiment_name = INFERENCE_CFG['experiment_name']
 channels = INFERENCE_CFG['channels']
@@ -132,7 +134,9 @@ dataset = FDF256Dataset(dirpath=INFERENCE_CFG['dataset_pth'], load_keypoints=INF
 dataloader = DataLoader(dataset, batch_size=INFERENCE_CFG['batch_size'], shuffle=False, num_workers=1,
                         prefetch_factor=1, persistent_workers=False, pin_memory=False)
 
-device = "cuda"
+if torch.cuda.is_available(): device = 'cuda'; print('CUDA is available')
+elif torch.backends.mps.is_available(): device = 'mps'; print('MPS is available')
+else: device = 'cpu'; print('CPU is available')
 
 if __name__ == '__main__':
 
@@ -143,9 +147,9 @@ if __name__ == '__main__':
         self_condition_dim=(7 * 2 if dataset.load_keypoints else None)
     )
     model = torch.nn.DataParallel(model)
-    model = model.to("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
 
-    model.load_state_dict(torch.load(Path("./results/" + experiment_name + ".pth")))
+    model.load_state_dict(torch.load(Path(INFERENCE_CFG['model_path']), map_location=torch.device(device)))
     model.eval()
 
     og_data = next(iter(dataloader))
@@ -161,9 +165,10 @@ if __name__ == '__main__':
         img2inpaint = None
 
     # inference
-    samples = sample(model_fn, image_size=image_size, batch_size=batch_size, channels=channels,
+    samples = sample(model_fn, image_size=image_size, batch_size=batch_size, channels=channels, device=device,
                      img2inpaint=img2inpaint)  # list of 1000 ndarrays of shape (batchsize, 3, 64, 64)
 
+    """
     reversed_imgs = []
     for img_idx in range(og_data['img'].shape[0]):
         reversed_imgs.append(reverse_transform(og_data['img'][img_idx]))
@@ -185,4 +190,8 @@ if __name__ == '__main__':
         for i in range(batch_size):
             image = rearrange(samples[-1][i], 'c h w -> h w c')
             plt.imsave(f'generated_images/{i}.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))
+"""
 
+    for i in range(batch_size):
+        image = rearrange(samples[-1][i], 'c h w -> h w c')
+        plt.imsave(f'generated_images/{i}.jpeg', np.asarray((image + 1) / 2 * 255, dtype=np.uint8))

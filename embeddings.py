@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 import math
+import matplotlib.pyplot as plt
 
 class SinusoidalPositionEmbeddings(nn.Module):
     """
@@ -20,3 +21,11 @@ class SinusoidalPositionEmbeddings(nn.Module):
         embeddings = time[:, None] * embeddings[None, :]
         embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
         return embeddings
+
+if __name__ == '__main__':
+    embedding = SinusoidalPositionEmbeddings(5)
+    out = embedding(torch.tensor(data=([1.0])))
+    print(out)
+    print(out.shape)
+    plt.plot(out[0])
+    plt.show()
